@@ -1,0 +1,234 @@
+# =============================================================================
+# meter-forecast — default configuration
+# =============================================================================
+# Every tunable used by the pipeline lives here. Copy this file, edit it, and
+# pass `--config my_config.yaml` (CLI) or `load_config("my_config.yaml")` (API).
+#
+# Units note: `consumption_kw` / `production_kw` columns hold ENERGY in kWh per
+# 15-minute interval (the `_kw` suffix is legacy). After hourly aggregation all
+# quantities are kWh per hour. See docs/data_contract.md.
+# =============================================================================
+
+random_seed: 42
+local_tz: Europe/Rome
+
+# Targets the models forecast (must be columns produced by cleaning).
+targets:
+  - grid_export
+  - grid_import
+
+# ---------------------------------------------------------------------------
+# Cleaning / preprocessing
+# ---------------------------------------------------------------------------
+cleaning:
+  # Drop readings before this timestamp (set to null to keep all history).
+  start_date: null
+  # Values below this (kWh/h) are treated as meter noise and zeroed.
+  noise_floor_kwh: 0.020
+  # Linear interpolation only fills gaps up to this many hours.
+  max_gap_hours: 1
+  # Rolling z-score outlier detection.
+  outlier_window_hours: 168      # 7 days
+  outlier_min_periods: 24
+  outlier_zscore_threshold: 3.0
+
+# ---------------------------------------------------------------------------
+# Data sufficiency — a device must clear BOTH bars to be modelled.
+# These thresholds are what produce the "too little data" evidence.
+# ---------------------------------------------------------------------------
+sufficiency:
+  # min_span_days defaults to cv_folds * test_days + 14 if left null.
+  min_span_days: 42
+  min_coverage: 0.40             # >= 40% of expected hourly slots filled
+  # A device with mean grid_export below this (kWh/h) is consumption-only:
+  # the grid_export model is skipped for it.
+  export_min_mean_kwh: 0.01
+  # A device with mean grid_import below this (kWh/h) is skipped for import.
+  import_min_mean_kwh: 0.01
+
+# ---------------------------------------------------------------------------
+# Cross validation / horizons
+# ---------------------------------------------------------------------------
+cv:
+  folds: 4
+  test_days: 7
+  # Sparse horizons evaluated per band during CV (full 1..48 are forecast).
+  cv_horizons_by_band:
+    short: [1, 2, 3, 4, 5, 6, 8]
+    medium: [10, 12, 15, 18, 21, 24]
+    long: [30, 36, 42, 48]
+
+horizon_bands:
+  short: [1, 8]      # inclusive range
+  medium: [9, 24]
+  long: [25, 48]
+
+forecast_horizon: 48               # hours ahead to forecast
+
+# ---------------------------------------------------------------------------
+# LightGBM hyperparameters
+# ---------------------------------------------------------------------------
+lgb_params:
+  objective: regression
+  metric: rmse
+  boosting_type: gbdt
+  num_leaves: 31
+  learning_rate: 0.05
+  feature_fraction: 0.8
+  bagging_fraction: 0.8
+  bagging_freq: 5
+  min_data_in_leaf: 20
+  max_depth: 7
+  lambda_l1: 0.1
+  lambda_l2: 0.1
+  verbose: -1
+# Per-target overrides for the POINT model only (mirrors LGB_PARAMS_IMPORT in
+# 03_forecasting.ipynb). grid_import is zero-inflated — PV devices import only at
+# night, so the series is mostly exact zeros; an L2 objective chases the rare
+# nighttime spikes and loses badly to seasonal-naive. Tweedie is built for
+# non-negative zero-inflated targets and (unlike regression_l1) supports the
+# monotone constraints. Quantile models always keep the quantile objective.
+lgb_params_by_target:
+  grid_import:
+    objective: tweedie
+    metric: tweedie
+    tweedie_variance_power: 1.5
+# alpha for the lower/upper quantile models
+quantile_low: 0.25
+quantile_high: 0.75
+# minimum rows before a temporal early-stopping split is used
+min_rows_for_validation_split: 100
+num_boost_round: 500
+num_boost_round_small: 200
+early_stopping_rounds: 30
+validation_split_fraction: 0.85
+
+# ---------------------------------------------------------------------------
+# Conformalized Quantile Regression (prediction intervals)
+# ---------------------------------------------------------------------------
+cqr:
+  target_coverage: 0.50
+  calibration_split_fraction: 0.80
+  min_calibration_samples: 30
+
+# ---------------------------------------------------------------------------
+# Features
+# ---------------------------------------------------------------------------
+features:
+  calendar:
+    - hour_sin
+    - hour_cos
+    - day_of_week
+    - month
+    - is_weekend
+  # Superset of weather columns read from the processed frame. Any of these
+  # that are absent from your data are dropped with a logged warning, so the
+  # package still runs on calendar + lag features alone.
+  weather_all:
+    - global_tilted_irradiance
+    - shortwave_radiation
+    - cloud_cover
+    - temperature_2m
+    - clearsky_index
+    - effective_solar_pv
+    - heating_degree
+    - cooling_degree
+    - is_daylight
+    - solar_elevation
+    - cloud_cover_diff
+    - pv_temp_factor
+    - ghi_ramp
+  # Per-target weather feature subsets (mirrors 03_forecasting.ipynb).
+  weather_by_target:
+    grid_export:
+      - global_tilted_irradiance
+      - shortwave_radiation
+      - cloud_cover
+      - clearsky_index
+      - effective_solar_pv
+      - solar_elevation
+      - cloud_cover_diff
+      - pv_temp_factor
+      - ghi_ramp
+      - temperature_2m
+      - is_daylight
+    grid_import_pv:
+      - temperature_2m
+      - heating_degree
+      - is_daylight
+      - effective_solar_pv
+      - clearsky_index
+      - cloud_cover
+      - solar_elevation
+    grid_import_no_pv:
+      - temperature_2m
+      - heating_degree
+      - is_daylight
+  # Lag/rolling features appended for every target.
+  lags:
+    - same_hour_1d
+    - same_hour_2d
+    - same_hour_3d
+    - same_hour_7d
+    - same_hour_14d
+    - mean_same_hour_7d
+    - diff_1d
+    - diff_7d
+    - roll_24h_mean
+    - roll_24h_std
+  # Monotonic constraints (+1 increasing, -1 decreasing) by target.
+  monotonic:
+    grid_export:
+      positive: [global_tilted_irradiance, shortwave_radiation, effective_solar_pv, clearsky_index, solar_elevation]
+      negative: [cloud_cover]
+    grid_import_pv:
+      positive: [heating_degree, cloud_cover]
+      negative: [effective_solar_pv, clearsky_index, solar_elevation]
+    grid_import_no_pv:
+      positive: [heating_degree]
+      negative: []
+
+# ---------------------------------------------------------------------------
+# Weather auto-download (Open-Meteo) — used when you pass a lat/lon instead of
+# a weather file. All optional: with no latitude/longitude the pipeline runs
+# weather-free (calendar + lag features only).
+# ---------------------------------------------------------------------------
+weather:
+  latitude: null                 # e.g. 46.07 (north positive)
+  longitude: null                # e.g. 11.12 (east positive)
+  elevation: null                # site metres a.s.l.; null -> Open-Meteo DEM auto-
+                                 # detect. Set it in mountainous terrain (e.g. 1100
+                                 # for Folgaria) where the grid-cell average is off.
+  panel_tilt: 30                 # PV panel tilt (deg) for global_tilted_irradiance
+  panel_azimuth: 0               # PV panel azimuth (deg, Open-Meteo: 0 = south)
+  heating_base_c: 18.0           # base temp for heating-degree hours
+  cooling_base_c: 24.0           # base temp for cooling-degree hours
+  pv_temp_coeff: 0.004           # PV derating per deg C above reference
+  pv_temp_ref_c: 25.0            # reference cell temperature
+  timeout_seconds: 60
+  archive_url: https://archive-api.open-meteo.com/v1/archive
+  forecast_url: https://api.open-meteo.com/v1/forecast
+
+# ---------------------------------------------------------------------------
+# Backtest (error analysis)
+# ---------------------------------------------------------------------------
+backtest:
+  origins: 21
+  warmup_days: 14                 # skip origins closer than this to series start
+
+# ---------------------------------------------------------------------------
+# MLflow experiment tracking (pluggable)
+# ---------------------------------------------------------------------------
+tracking:
+  enabled: true
+  # null -> use MLFLOW_TRACKING_URI env var, else `default_local_uri` below.
+  tracking_uri: null
+  # Local fallback when neither the env var nor tracking_uri is set. A DB backend
+  # is required for the model registry; the old ./mlruns file store is deprecated
+  # in MLflow 3.x and cannot register models.
+  default_local_uri: sqlite:///mlflow.db
+  experiment_name: meter-forecast
+  # When true, each run also creates a version of `registered_model_name` in the
+  # MLflow Model Registry (requires a database tracking backend).
+  register_model: false
+  registered_model_name: meter-forecast-lgb
