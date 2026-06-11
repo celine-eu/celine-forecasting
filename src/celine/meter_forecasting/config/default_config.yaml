@@ -232,3 +232,10 @@ tracking:
   # MLflow Model Registry (requires a database tracking backend).
   register_model: false
   registered_model_name: meter-forecast-lgb
+
+# ---------------------------------------------------------------------------
+# Database datasets (optional — set null to use file-based loading only)
+# ---------------------------------------------------------------------------
+# Provide a datasets section to load meter/weather data from PostgreSQL tables.
+# See examples/datasets.yaml for a sample configuration.
+datasets: null

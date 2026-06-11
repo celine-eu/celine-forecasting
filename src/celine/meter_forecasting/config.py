@@ -41,6 +41,7 @@ class ForecastConfig:
     features: dict[str, Any] = field(default_factory=dict)
     backtest: dict[str, Any] = field(default_factory=dict)
     tracking: dict[str, Any] = field(default_factory=dict)
+    datasets: dict[str, Any] = field(default_factory=dict)
 
     # ----------------------------------------------------------------- helpers
     @property
@@ -69,12 +70,30 @@ class ForecastConfig:
         raise ValueError(f"Horizon {horizon} is outside all configured bands")
 
 
-def load_config(path: str | Path | None = None) -> ForecastConfig:
+def _deep_merge(base: dict, overlay: dict) -> dict:
+    """Merge overlay into base. Lists under 'meters' are concatenated."""
+    merged = base.copy()
+    for key, value in overlay.items():
+        if key == "meters" and isinstance(value, list) and isinstance(merged.get(key), list):
+            merged[key] = merged[key] + value
+        elif isinstance(value, dict) and isinstance(merged.get(key), dict):
+            merged[key] = _deep_merge(merged[key], value)
+        else:
+            merged[key] = value
+    return merged
+
+
+def load_config(
+    path: str | Path | None = None, overlay: str | Path | None = None
+) -> ForecastConfig:
     """Load and validate the pipeline configuration.
 
     Args:
         path: Path to a YAML config file. Defaults to the packaged
             ``config/default_config.yaml``.
+        overlay: Optional path to a second YAML config that is deep-merged
+            on top of the base. For ``datasets.meters`` lists, the overlay's
+            entries are *appended* (extend, not replace).
 
     Returns:
         A populated :class:`ForecastConfig`.
@@ -92,6 +111,14 @@ def load_config(path: str | Path | None = None) -> ForecastConfig:
 
     if not raw:
         raise ValueError(f"Config file is empty: {config_path}")
+
+    if overlay is not None:
+        overlay_path = Path(overlay)
+        if not overlay_path.exists():
+            raise FileNotFoundError(f"Overlay config not found: {overlay_path}")
+        with open(overlay_path, encoding="utf-8") as handle:
+            overlay_raw = yaml.safe_load(handle) or {}
+        raw = _deep_merge(raw, overlay_raw)
 
     required = {"random_seed", "local_tz", "targets"}
     missing = required - raw.keys()
@@ -111,4 +138,5 @@ def load_config(path: str | Path | None = None) -> ForecastConfig:
         features=raw.get("features", {}),
         backtest=raw.get("backtest", {}),
         tracking=raw.get("tracking", {}),
+        datasets=raw.get("datasets") or {},
     )

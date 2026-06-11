@@ -1,34 +1,25 @@
 """Command-line interface for meter-forecast.
 
-Subcommands:
-    run        The easy path — point it at your meter file and go. Auto-maps
-               columns, optionally downloads weather from a lat/lon, trains,
-               and writes forecasts + a plain-text summary. Cross-validation is
-               off by default so it finishes quickly.
-    validate   Check a meter (and optional weather) file against the contract
-               and report per-device data sufficiency — no training.
-    train      Full pipeline with cross-validation / backtest control (for
-               power users).
-
 Examples:
-    # Simplest: just your meter data.
+    # From a CSV file:
     meter-forecast run --meters my_meters.csv --output out/
 
-    # Better solar accuracy: let it fetch weather for your location.
-    meter-forecast run --meters my_meters.csv --lat 46.07 --lon 11.12 --output out/
+    # From a database (configured in YAML):
+    meter-forecast run --datasets-config datasets.yaml --output out/
 
-    meter-forecast validate --meters my_meters.csv
-    meter-forecast train --meters my_meters.csv --weather weather.csv \\
-        --output out/ --backtest
+    # With auto-downloaded weather:
+    meter-forecast run --meters my_meters.csv --lat 46.07 --lon 11.12 --output out/
 """
 
 from __future__ import annotations
 
-import argparse
 import logging
 import sys
+from pathlib import Path
+from typing import Annotated, Optional
 
 import pandas as pd
+import typer
 
 from .cleaning import build_processed_hourly
 from .config import ForecastConfig, load_config
@@ -39,70 +30,86 @@ from .validation import InsufficientDataError, assess_sufficiency, eligibility_t
 
 logger = logging.getLogger(__name__)
 
+app = typer.Typer(
+    name="meter-forecast",
+    help="Open-source 48h energy forecasting for smart meters.",
+    add_completion=False,
+)
 
-def _build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="meter-forecast", description=__doc__)
-    parser.add_argument("--config", help="Path to a YAML config (defaults to packaged config)")
-    parser.add_argument("-v", "--verbose", action="store_true", help="Enable debug logging")
-    sub = parser.add_subparsers(dest="command", required=True)
+Config = Annotated[Optional[Path], typer.Option(help="Path to a YAML config (defaults to packaged config)")]
+DatasetsConfig = Annotated[Optional[Path], typer.Option(help="Datasets-only YAML overlay (merged on top of --config)")]
+Verbose = Annotated[bool, typer.Option("--verbose", "-v", help="Enable debug logging")]
+Meters = Annotated[Optional[Path], typer.Option(help="Meter CSV/Parquet (15-min readings)")]
+Weather = Annotated[Optional[Path], typer.Option(help="Optional weather CSV/Parquet (hourly)")]
+AssumeTz = Annotated[str, typer.Option(help="Timezone for naive meter timestamps")]
+DbUri = Annotated[Optional[str], typer.Option(help="SQLAlchemy DB URI (overrides datasets.uri in config)")]
+DeviceIds = Annotated[Optional[list[str]], typer.Option(help="Only load these device IDs from the database")]
+Lat = Annotated[Optional[float], typer.Option(help="Site latitude — auto-download weather")]
+Lon = Annotated[Optional[float], typer.Option(help="Site longitude — auto-download weather")]
+Output = Annotated[Path, typer.Option(help="Output directory")]
 
-    common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--meters", required=True, help="Meter CSV/Parquet (15-min readings)")
-    common.add_argument("--weather", help="Optional weather CSV/Parquet (hourly)")
-    common.add_argument(
-        "--assume-tz",
-        default="UTC",
-        help="Timezone for naive meter timestamps (e.g. Europe/Rome). Default UTC.",
+
+def _setup_logging(verbose: bool) -> None:
+    logging.basicConfig(
+        level=logging.DEBUG if verbose else logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
 
-    geo = argparse.ArgumentParser(add_help=False)
-    geo.add_argument("--lat", type=float, help="Site latitude — auto-download weather")
-    geo.add_argument("--lon", type=float, help="Site longitude — auto-download weather")
 
-    run = sub.add_parser(
-        "run", parents=[common, geo], help="Easy one-shot: meter data in, forecasts out"
+def _load_meters_from_opts(
+    config: ForecastConfig,
+    *,
+    meters: Path | None,
+    assume_tz: str,
+    db_uri: str | None,
+    device_ids: list[str] | None,
+) -> pd.DataFrame:
+    if meters:
+        return load_meters(str(meters), assume_tz=assume_tz)
+
+    datasets = config.datasets
+    if datasets and datasets.get("meters"):
+        from .db import build_engine, load_meters_from_db
+
+        uri = db_uri or datasets.get("uri")
+        engine = build_engine(uri)
+        return load_meters_from_db(
+            datasets["meters"],
+            engine=engine,
+            device_ids=device_ids,
+        )
+
+    typer.echo(
+        "Error: provide --meters <file> or configure datasets.meters in your config YAML.",
+        err=True,
     )
-    run.add_argument("--output", default="meter_forecast_out", help="Output directory")
-    run.add_argument("--cv", action="store_true", help="Also run cross-validation (slower)")
-
-    sub.add_parser("validate", parents=[common], help="Validate data and report sufficiency")
-
-    train = sub.add_parser(
-        "train", parents=[common, geo], help="Train models and write forecasts"
-    )
-    train.add_argument("--output", required=True, help="Output directory for artifacts")
-    train.add_argument("--backtest", action="store_true", help="Also run the rolling backtest")
-    train.add_argument("--no-cv", action="store_true", help="Skip cross-validation")
-    return parser
+    raise typer.Exit(1)
 
 
 def _resolve_weather(
     df_meters: pd.DataFrame,
     config: ForecastConfig,
     *,
-    weather_path: str | None,
+    weather_path: Path | None,
     lat: float | None,
     lon: float | None,
+    db_uri: str | None = None,
 ) -> pd.DataFrame | None:
-    """Pick a weather source: explicit file > lat/lon download > none.
-
-    Args:
-        df_meters: Loaded meter frame (used to size the download window).
-        config: Pipeline configuration.
-        weather_path: Optional path to a weather file.
-        lat: Optional site latitude.
-        lon: Optional site longitude.
-
-    Returns:
-        A weather DataFrame, or None for weather-free mode.
-    """
     if weather_path:
-        return load_weather(weather_path)
+        return load_weather(str(weather_path))
+
+    datasets = config.datasets
+    if datasets and datasets.get("weather"):
+        from .db import build_engine, load_weather_from_db
+
+        uri = db_uri or datasets.get("uri")
+        engine = build_engine(uri)
+        return load_weather_from_db(datasets["weather"], engine=engine)
+
     if lat is None or lon is None:
-        logger.info("No weather file and no --lat/--lon — running weather-free.")
+        logger.info("No weather source configured — running weather-free.")
         return None
 
-    # Lazy import so the urllib-based downloader is only loaded when used.
     from .cleaning import aggregate_to_hourly
     from .weather import download_weather_features
 
@@ -127,64 +134,129 @@ def _resolve_weather(
     )
 
 
-def main(argv: list[str] | None = None) -> int:
-    """CLI entry point. Returns a process exit code."""
-    args = _build_parser().parse_args(argv)
-    logging.basicConfig(
-        level=logging.DEBUG if args.verbose else logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+@app.command()
+def run(
+    config: Config = None,
+    datasets_config: DatasetsConfig = None,
+    verbose: Verbose = False,
+    meters: Meters = None,
+    weather: Weather = None,
+    assume_tz: AssumeTz = "UTC",
+    db_uri: DbUri = None,
+    device_ids: DeviceIds = None,
+    lat: Lat = None,
+    lon: Lon = None,
+    output: Output = Path("meter_forecast_out"),
+    cv: Annotated[bool, typer.Option(help="Also run cross-validation (slower)")] = False,
+) -> None:
+    """Easy one-shot: meter data in, forecasts out."""
+    _setup_logging(verbose)
+    cfg = load_config(
+        str(config) if config else None,
+        overlay=str(datasets_config) if datasets_config else None,
     )
-
-    config = load_config(args.config)
-    df_meters = load_meters(args.meters, assume_tz=args.assume_tz)
-
-    if args.command == "validate":
-        df_weather = load_weather(args.weather) if args.weather else None
-        processed = build_processed_hourly(df_meters, config, df_weather=df_weather)
-        try:
-            verdicts = assess_sufficiency(processed, config)
-        except InsufficientDataError as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
-        report = eligibility_to_frame(verdicts)
-        print(report.to_string(index=False))
-        n_ok = int(report["eligible"].sum())
-        print(f"\n{n_ok}/{len(report)} device(s) eligible for modelling.")
-        return 0 if n_ok else 1
-
-    if args.command in {"run", "train"}:
-        df_weather = _resolve_weather(
-            df_meters, config, weather_path=args.weather, lat=args.lat, lon=args.lon
+    df_meters = _load_meters_from_opts(
+        cfg, meters=meters, assume_tz=assume_tz, db_uri=db_uri, device_ids=device_ids,
+    )
+    df_weather = _resolve_weather(
+        df_meters, cfg, weather_path=weather, lat=lat, lon=lon, db_uri=db_uri,
+    )
+    try:
+        result = train_pipeline(
+            df_meters, cfg, df_weather=df_weather,
+            do_cv=cv, do_backtest=False, output_dir=str(output),
         )
-        do_cv = args.cv if args.command == "run" else not args.no_cv
-        do_backtest = args.backtest if args.command == "train" else False
-        try:
-            result = train_pipeline(
-                df_meters,
-                config,
-                df_weather=df_weather,
-                do_cv=do_cv,
-                do_backtest=do_backtest,
-                output_dir=args.output,
-            )
-        except InsufficientDataError as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
+    except InsufficientDataError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1)
 
-        if args.command == "run":
-            from .reporting import summarize_run
+    from .reporting import summarize_run
 
-            print("\n" + summarize_run(result))
-            print(f"\nArtifacts written to {args.output}/ (forecasts.json, summary.txt).")
-        else:
-            print(f"Trained {len(result.trained_models)} device(s); artifacts in {args.output}")
-            if not result.cv_results.empty:
-                print("\nCross-validation skill:")
-                print(result.cv_results.round(3).to_string(index=False))
-        return 0
+    typer.echo("\n" + summarize_run(result))
+    typer.echo(f"\nArtifacts written to {output}/ (forecasts.json, summary.txt).")
 
-    return 2  # pragma: no cover
+
+@app.command()
+def validate(
+    config: Config = None,
+    datasets_config: DatasetsConfig = None,
+    verbose: Verbose = False,
+    meters: Meters = None,
+    weather: Weather = None,
+    assume_tz: AssumeTz = "UTC",
+    db_uri: DbUri = None,
+    device_ids: DeviceIds = None,
+) -> None:
+    """Check data against the contract and report per-device data sufficiency."""
+    _setup_logging(verbose)
+    cfg = load_config(
+        str(config) if config else None,
+        overlay=str(datasets_config) if datasets_config else None,
+    )
+    df_meters = _load_meters_from_opts(
+        cfg, meters=meters, assume_tz=assume_tz, db_uri=db_uri, device_ids=device_ids,
+    )
+    df_weather = load_weather(str(weather)) if weather else None
+    processed = build_processed_hourly(df_meters, cfg, df_weather=df_weather)
+    try:
+        verdicts = assess_sufficiency(processed, cfg)
+    except InsufficientDataError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1)
+    report = eligibility_to_frame(verdicts)
+    typer.echo(report.to_string(index=False))
+    n_ok = int(report["eligible"].sum())
+    typer.echo(f"\n{n_ok}/{len(report)} device(s) eligible for modelling.")
+    if not n_ok:
+        raise typer.Exit(1)
+
+
+@app.command()
+def train(
+    config: Config = None,
+    datasets_config: DatasetsConfig = None,
+    verbose: Verbose = False,
+    meters: Meters = None,
+    weather: Weather = None,
+    assume_tz: AssumeTz = "UTC",
+    db_uri: DbUri = None,
+    device_ids: DeviceIds = None,
+    lat: Lat = None,
+    lon: Lon = None,
+    output: Output = ...,
+    backtest: Annotated[bool, typer.Option(help="Also run the rolling backtest")] = False,
+    no_cv: Annotated[bool, typer.Option(help="Skip cross-validation")] = False,
+) -> None:
+    """Train models and write forecasts."""
+    _setup_logging(verbose)
+    cfg = load_config(
+        str(config) if config else None,
+        overlay=str(datasets_config) if datasets_config else None,
+    )
+    df_meters = _load_meters_from_opts(
+        cfg, meters=meters, assume_tz=assume_tz, db_uri=db_uri, device_ids=device_ids,
+    )
+    df_weather = _resolve_weather(
+        df_meters, cfg, weather_path=weather, lat=lat, lon=lon, db_uri=db_uri,
+    )
+    try:
+        result = train_pipeline(
+            df_meters, cfg, df_weather=df_weather,
+            do_cv=not no_cv, do_backtest=backtest, output_dir=str(output),
+        )
+    except InsufficientDataError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1)
+
+    typer.echo(f"Trained {len(result.trained_models)} device(s); artifacts in {output}")
+    if not result.cv_results.empty:
+        typer.echo("\nCross-validation skill:")
+        typer.echo(result.cv_results.round(3).to_string(index=False))
+
+
+def main() -> None:
+    app()
 
 
 if __name__ == "__main__":  # pragma: no cover
-    raise SystemExit(main())
+    main()

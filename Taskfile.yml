@@ -1,0 +1,51 @@
+version: "3"
+
+vars:
+  CONFIG: config.local.yaml
+  OUTPUT: out
+
+tasks:
+  install:
+    desc: Install all dependencies
+    cmds:
+      - uv sync --extra mlflow --extra db --extra dev
+
+  test:
+    desc: Run test suite
+    cmds:
+      - uv run pytest {{.CLI_ARGS}}
+
+  validate:
+    desc: Validate meter data from the database
+    cmds:
+      - uv run meter-forecast validate --datasets-config {{.CONFIG}} {{.CLI_ARGS}}
+
+  run:
+    desc: Train and forecast from the database
+    cmds:
+      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}} {{.CLI_ARGS}}
+
+  train:
+    desc: Full training with backtest from the database
+    cmds:
+      - uv run meter-forecast train --datasets-config {{.CONFIG}} --output {{.OUTPUT}} --backtest {{.CLI_ARGS}}
+
+  mlflow:
+    desc: Start MLflow + MinIO
+    cmds:
+      - docker compose up -d
+
+  mlflow:stop:
+    desc: Stop MLflow + MinIO
+    cmds:
+      - docker compose down
+
+  lint:
+    desc: Run ruff linter
+    cmds:
+      - uv run ruff check src/ tests/
+
+  format:
+    desc: Format code with ruff
+    cmds:
+      - uv run ruff format src/ tests/

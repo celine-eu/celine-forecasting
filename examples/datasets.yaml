@@ -1,0 +1,40 @@
+# =============================================================================
+# Sample datasets configuration for loading meter/weather data from PostgreSQL.
+#
+# Copy this file, edit it, and pass `--config datasets.yaml` (CLI) or
+# `load_config("datasets.yaml")` (API). Only the `datasets` section is needed
+# here — pipeline tuning parameters fall back to the packaged defaults.
+#
+# Install the database extra: uv add celine-meter-forecasting[db]
+# =============================================================================
+
+datasets:
+  # SQLAlchemy database URI. Can also be set via the DATABASE_URL env var
+  # or the --db-uri CLI flag.
+  uri: postgresql://postgres:securepassword123@172.17.0.1:15432/datasets
+
+  # Meter sources — ordered by priority (first wins on duplicate device_id + ts).
+  # Each entry declares a table and optionally a column mapping + timezone.
+  meters:
+    # Source whose columns already match the contract (device_id, ts,
+    # consumption_kw, production_kw) — no mapping needed.
+    - table: silver.meters_data_normalized
+
+    # Source with different column names — map them to the contract.
+    # `columns` is {source_column: contract_column}.
+    # `assume_tz` localises naive timestamps before converting to UTC.
+    #
+    # - table: silver.my_other_table
+    #   columns:
+    #     sensor_ref: device_id
+    #     kwh_imported: consumption_kw
+    #     kwh_exported: production_kw
+    #   assume_tz: Europe/Rome
+
+  # Weather features table (optional). Columns should include at minimum
+  # `datetime` and any subset of: global_tilted_irradiance, shortwave_radiation,
+  # cloud_cover, temperature_2m, clearsky_index, effective_solar_pv,
+  # heating_degree, cooling_degree, is_daylight, solar_elevation,
+  # cloud_cover_diff, pv_temp_factor.
+  weather:
+    table: gold.om_weather_features_meters

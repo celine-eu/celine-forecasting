@@ -19,6 +19,12 @@
 - Configuration via YAML (`config/default_config.yaml`), overridable per-run
 - The core package has no infrastructure dependencies (no DB, no message queue)
 
+## Constraints
+
+- This repo should be reusable across different datasets, ensure data input is generalized, have clear shapes and requirements and is communicated properly in user facing docs
+- private records, table, datasets and names should never land the open source codebase.
+- local database uri is postgresql://postgres:securepassword123@172.17.0.1:15432/datasets
+
 ## Running
 
 ```bash
