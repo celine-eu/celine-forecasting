@@ -21,3 +21,4 @@ mlflow.db
 mlruns/
 
 *.local.yaml
+out

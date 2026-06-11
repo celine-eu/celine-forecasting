@@ -22,11 +22,17 @@ tasks:
 
   run:
     desc: Train and forecast from the database
+    deps: [install, mlflow]
+    env:
+      MLFLOW_TRACKING_URI: http://localhost:5000
     cmds:
       - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}} {{.CLI_ARGS}}
 
   train:
     desc: Full training with backtest from the database
+    deps: [install, mlflow]
+    env:
+      MLFLOW_TRACKING_URI: http://localhost:5000
     cmds:
       - uv run meter-forecast train --datasets-config {{.CONFIG}} --output {{.OUTPUT}} --backtest {{.CLI_ARGS}}
 
@@ -39,6 +45,12 @@ tasks:
     desc: Stop MLflow + MinIO
     cmds:
       - docker compose down
+
+  mlflow:ui:
+    desc: Open MLflow UI in browser
+    deps: [mlflow]
+    cmds:
+      - echo "MLflow UI at http://localhost:5000"
 
   lint:
     desc: Run ruff linter
