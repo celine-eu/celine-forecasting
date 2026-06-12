@@ -58,6 +58,7 @@ def train_lgb_model(
     params: dict,
     config: ForecastConfig,
     monotone_constraints: list[int] | None = None,
+    init_model: lgb.Booster | None = None,
 ) -> lgb.Booster:
     """Train a LightGBM booster with an optional temporal validation split.
 
@@ -68,6 +69,7 @@ def train_lgb_model(
         config: Pipeline configuration.
         monotone_constraints: Optional constraint vector (ignored for quantile
             objectives, matching the notebook).
+        init_model: Previous booster for incremental (warm-start) training.
 
     Returns:
         A trained :class:`lightgbm.Booster`.
@@ -80,10 +82,26 @@ def train_lgb_model(
     if monotone_constraints is not None and not is_quantile:
         train_params["monotone_constraints"] = monotone_constraints
 
+    incr_cfg = config.incremental
+    if init_model is not None:
+        if init_model.num_feature() != X.shape[1]:
+            logger.warning(
+                "Feature count changed (%d → %d) — discarding init_model",
+                init_model.num_feature(), X.shape[1],
+            )
+            init_model = None
+    if init_model is not None:
+        rounds = int(incr_cfg.get("num_boost_round", 100))
+    else:
+        rounds = None
+
     min_rows = int(config.raw.get("min_rows_for_validation_split", 100))
     if len(X) < min_rows:
-        rounds = int(config.raw.get("num_boost_round_small", 200))
-        return lgb.train(train_params, lgb.Dataset(X, label=y), num_boost_round=rounds)
+        r = rounds or int(config.raw.get("num_boost_round_small", 200))
+        return lgb.train(
+            train_params, lgb.Dataset(X, label=y),
+            num_boost_round=r, init_model=init_model,
+        )
 
     split_frac = float(config.raw.get("validation_split_fraction", 0.85))
     split_idx = int(len(X) * split_frac)
@@ -92,8 +110,9 @@ def train_lgb_model(
     return lgb.train(
         train_params,
         train_data,
-        num_boost_round=int(config.raw.get("num_boost_round", 500)),
+        num_boost_round=rounds or int(config.raw.get("num_boost_round", 500)),
         valid_sets=[val_data],
+        init_model=init_model,
         callbacks=[
             lgb.early_stopping(int(config.raw.get("early_stopping_rounds", 30)), verbose=False)
         ],
@@ -146,6 +165,7 @@ def train_band_models(
     has_pv: bool = True,
     available_columns: set[str] | None = None,
     calibrate: bool = True,
+    previous_models: dict | None = None,
 ) -> dict | None:
     """Train one horizon-band model bundle for a (device, target).
 
@@ -195,7 +215,9 @@ def train_band_models(
             return None
 
         X_feat = X_band.drop(columns=[COL_TS_HOUR])
-        model_main = train_lgb_model(X_feat, y_band, main_params, config, mono)
+        prev = (previous_models or {}).get(band_name)
+        prev_main = prev["main"] if prev else None
+        model_main = train_lgb_model(X_feat, y_band, main_params, config, mono, init_model=prev_main)
 
         if not calibrate:
             band_models[band_name] = {

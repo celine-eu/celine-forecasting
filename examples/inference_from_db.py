@@ -1,86 +1,74 @@
-"""Load a registered MLflow model and run inference against DB-sourced data.
+"""Load a device model from MLflow and run inference against DB-sourced data.
 
-Demonstrates the production inference pattern: the model itself never reads a
-database; the orchestration layer does. This keeps the model artifact portable
-and testable.
+Demonstrates the production inference pattern: load per-device LightGBM
+models from MLflow artifacts, fetch fresh data from the database, and
+produce forecasts.
 
 Usage:
-    # Ensure MLFLOW_TRACKING_URI points at your tracking server
-    export MLFLOW_TRACKING_URI=http://localhost:5000
-
-    python examples/inference_from_db.py \
-        --model "models:/meter-forecast-lgb/latest" \
-        --db "postgresql://user:pass@host:5432/datasets" \
-        --meters-query "SELECT * FROM silver.meters_data WHERE ts >= now() - interval '60 days'" \
-        --output forecasts.csv
-
-    # Or with weather:
-    python examples/inference_from_db.py \
-        --model "models:/meter-forecast-lgb/latest" \
-        --db "postgresql://user:pass@host:5432/datasets" \
-        --meters-query "SELECT * FROM silver.meters_data WHERE ts >= now() - interval '60 days'" \
-        --weather-query "SELECT * FROM gold.om_weather_features_meters WHERE ts >= now() - interval '60 days'" \
-        --output forecasts.csv
+    python examples/inference_from_db.py --device-id dev-A --output forecasts.json
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 
 import pandas as pd
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run inference from a registered MLflow model")
-    parser.add_argument("--model", required=True, help="MLflow model URI (e.g. models:/meter-forecast-lgb/latest)")
-    parser.add_argument("--db", required=True, help="SQLAlchemy database URL")
-    parser.add_argument("--meters-query", required=True, help="SQL query to fetch meter readings")
-    parser.add_argument("--weather-query", default=None, help="SQL query to fetch weather features (optional)")
-    parser.add_argument("--output", default=None, help="Output CSV path (default: stdout)")
-    parser.add_argument("--output-table", default=None, help="Write results to this DB table (schema.table)")
+    parser = argparse.ArgumentParser(description="Run inference from MLflow device models")
+    parser.add_argument("--device-id", required=True, help="Device ID to forecast")
+    parser.add_argument("--output", default=None, help="Output JSON path (default: stdout)")
     args = parser.parse_args()
 
-    try:
-        import mlflow
-    except ImportError:
-        print("mlflow is required: pip install mlflow>=2.10.0", file=sys.stderr)
+    from celine.meter_forecasting.config import load_config
+    from celine.meter_forecasting.db import build_engine, load_meters_from_db, load_weather_from_db
+    from celine.meter_forecasting.cleaning import build_processed_hourly, prepare_weather
+    from celine.meter_forecasting.forecast import forecast_records_from_bundle
+    from celine.meter_forecasting.tracking import get_tracker
+
+    config = load_config()
+    tracker = get_tracker(config)
+
+    print(f"Loading previous models for {args.device_id} ...", file=sys.stderr)
+    models = tracker.load_previous_models(args.device_id)
+    if models is None:
+        print(f"No models found for device {args.device_id}", file=sys.stderr)
         sys.exit(1)
 
-    from sqlalchemy import create_engine, text
+    datasets = config.datasets
+    engine = build_engine(datasets.get("uri"))
+    meters = load_meters_from_db(
+        datasets["meters"], engine=engine, device_ids=[args.device_id],
+    )
 
-    engine = create_engine(args.db)
+    weather = None
+    if datasets.get("weather"):
+        weather = load_weather_from_db(datasets["weather"], engine=engine)
 
-    print(f"Loading model from {args.model} ...", file=sys.stderr)
-    model = mlflow.pyfunc.load_model(args.model)
+    processed = build_processed_hourly(meters, config, df_weather=weather)
+    weather_prepared = prepare_weather(weather, config) if weather is not None else None
 
-    print("Fetching meter data ...", file=sys.stderr)
-    with engine.connect() as conn:
-        meters_df = pd.read_sql(text(args.meters_query), conn)
+    trained = {args.device_id: {}}
+    for key, bundle in models.items():
+        target, band = key.split("/", 1) if "/" in key else (key, key)
+        trained[args.device_id].setdefault(target, {})[band] = bundle
 
-    weather_df = None
-    if args.weather_query:
-        print("Fetching weather data ...", file=sys.stderr)
-        with engine.connect() as conn:
-            weather_df = pd.read_sql(text(args.weather_query), conn)
+    forecasts = forecast_records_from_bundle(
+        processed, config, trained,
+        export_eligible={args.device_id},
+        weather_df=weather_prepared,
+    )
 
-    print(f"Running inference ({len(meters_df)} meter rows) ...", file=sys.stderr)
-    if weather_df is not None:
-        forecast = model.predict({"meters": meters_df, "weather": weather_df})
-    else:
-        forecast = model.predict(meters_df)
-
-    if args.output_table:
-        schema, table = args.output_table.rsplit(".", 1) if "." in args.output_table else (None, args.output_table)
-        with engine.begin() as conn:
-            forecast.to_sql(table, conn, schema=schema, if_exists="replace", index=False)
-        print(f"Wrote {len(forecast)} rows to {args.output_table}", file=sys.stderr)
-
+    output = json.dumps(forecasts, indent=2, default=str)
     if args.output:
-        forecast.to_csv(args.output, index=False)
-        print(f"Wrote {len(forecast)} rows to {args.output}", file=sys.stderr)
-    elif not args.output_table:
-        print(forecast.to_csv(index=False))
+        with open(args.output, "w") as f:
+            f.write(output)
+        print(f"Wrote forecast to {args.output}", file=sys.stderr)
+    else:
+        print(output)
 
 
 if __name__ == "__main__":

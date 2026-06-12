@@ -41,6 +41,7 @@ class ForecastConfig:
     features: dict[str, Any] = field(default_factory=dict)
     backtest: dict[str, Any] = field(default_factory=dict)
     tracking: dict[str, Any] = field(default_factory=dict)
+    incremental: dict[str, Any] = field(default_factory=dict)
     datasets: dict[str, Any] = field(default_factory=dict)
 
     # ----------------------------------------------------------------- helpers
@@ -138,5 +139,6 @@ def load_config(
         features=raw.get("features", {}),
         backtest=raw.get("backtest", {}),
         tracking=raw.get("tracking", {}),
+        incremental=raw.get("incremental", {}),
         datasets=raw.get("datasets") or {},
     )

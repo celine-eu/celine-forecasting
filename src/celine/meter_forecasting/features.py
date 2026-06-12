@@ -19,6 +19,8 @@ from .schema import COL_TS_HOUR
 
 logger = logging.getLogger(__name__)
 
+warnings.filterwarnings("ignore", message="Mean of empty slice", category=RuntimeWarning)
+
 
 def _weather_key(target: str, has_pv: bool) -> str:
     """Map (target, has_pv) to the config key for its weather feature subset."""

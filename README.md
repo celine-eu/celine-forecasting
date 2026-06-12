@@ -2,34 +2,54 @@
 
 Open-source energy forecasting for smart meters and renewable energy communities.
 
-## Packages
-
-### celine.meter_forecasting
+## celine.meter_forecasting
 
 Per-device 48h energy forecasting using LightGBM with Conformalized Quantile Regression (CQR) prediction intervals.
 
-- Full training pipeline: data cleaning, validation, feature engineering, model training, calibration, evaluation
-- CLI: `meter-forecast validate|run|train`
-- MLflow integration for experiment tracking and model versioning
-- MLflow model serving via custom `pyfunc` wrapper
+- Per-device incremental training with drift detection
+- CLI: `meter-forecast run|train|validate|evaluate`
+- Loads from CSV/Parquet or PostgreSQL (configurable table sources)
+- MLflow integration: per-device runs, LightGBM model artifacts, metrics tracking
+- Weather features from Open-Meteo or database tables
+
+## Quick start
 
 ```bash
-uv sync --extra mlflow
+# Install
+uv sync --extra mlflow --extra db --extra dev
 
-# Quick start: train on your meter data
-meter-forecast run --meters data.csv --lat 46.07 --lon 11.12 --output out/
+# From a CSV file
+meter-forecast run --meters data.csv --output out/
+
+# From a database (configure tables in a YAML overlay)
+meter-forecast run --datasets-config datasets.yaml --output out/
+
+# Evaluate previous forecasts against actuals
+meter-forecast evaluate --datasets-config datasets.yaml
 ```
 
-## Local MLflow Development
+## Daily workflow (with Taskfile)
+
+```bash
+task run              # incremental retrain + forecast (auto-fallback to full retrain)
+task evaluate         # score yesterday's forecast against actuals
+task run:full         # force full retrain from scratch
+```
+
+## MLflow + MinIO
 
 ```bash
 docker compose up -d
-# MLflow UI at http://localhost:5000
-# MinIO Console at http://localhost:9001 (minioadmin/minioadmin)
-
-export MLFLOW_TRACKING_URI=http://localhost:5000
-meter-forecast train --meters data.csv --output out/
+# MLflow UI at http://172.17.0.1:5000
+# MinIO Console at http://172.17.0.1:9001 (minioadmin/minioadmin)
 ```
+
+## Configuration
+
+All infrastructure config (DB, MLflow, MinIO) is managed via pydantic-settings with dev defaults in `settings.py`. Override via `.env` file or environment variables. See `.env.example`.
+
+Pipeline tuning lives in `config/default_config.yaml`, overridable with `--config`.
+Database table sources are declared in a YAML overlay — see `examples/datasets.yaml`.
 
 ## License
 

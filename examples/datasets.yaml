@@ -31,10 +31,9 @@ datasets:
     #     kwh_exported: production_kw
     #   assume_tz: Europe/Rome
 
-  # Weather features table (optional). Columns should include at minimum
-  # `datetime` and any subset of: global_tilted_irradiance, shortwave_radiation,
-  # cloud_cover, temperature_2m, clearsky_index, effective_solar_pv,
-  # heating_degree, cooling_degree, is_daylight, solar_elevation,
-  # cloud_cover_diff, pv_temp_factor.
+  # Weather sources — ordered by priority (first wins on duplicate datetime).
+  # Same pattern as meters: list of tables, merged and deduplicated.
+  # Columns should include `datetime` and any subset of the weather contract.
   weather:
-    table: gold.om_weather_features_meters
+    - table: silver.copernicus_weather_features
+    # - table: gold.om_weather_features_meters
