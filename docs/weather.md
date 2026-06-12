@@ -31,16 +31,19 @@ meter-forecast run --meters my_meters.csv --lat 46.07 --lon 11.12 --output out/
 
 The two are concatenated and de-duplicated.
 
-## From a database table
+## From database tables
 
-If weather features are already computed in your database (e.g. by an upstream
-pipeline), declare the table in your datasets config:
+If weather features are already computed in your database (e.g. by upstream
+pipelines), declare them as a list in your datasets config. Multiple sources
+are merged and deduplicated on `datetime` — first source wins on overlap.
 
 ```yaml
 datasets:
   uri: postgresql://user:pass@host:5432/db
   weather:
-    table: gold.om_weather_features_meters
+    - table: silver.copernicus_weather_features   # historical observations
+    - table: silver.om_weather_hourly             # recent raw weather
+    - table: gold.om_weather_features_meters      # derived features (recent)
 ```
 
 ## Raw variables requested (Open-Meteo)

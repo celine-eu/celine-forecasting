@@ -76,8 +76,9 @@ clearsky_index, effective_solar_pv, heating_degree, cooling_degree,
 is_daylight, solar_elevation, cloud_cover_diff, pv_temp_factor
 ```
 
-Weather can come from: a file (`--weather`), a database table (`datasets.weather`
-in config), or auto-download from Open-Meteo (`--lat`/`--lon`).
+Weather can come from: a file (`--weather`), database tables (`datasets.weather`
+list in config — merged and deduplicated on `datetime`, first source wins),
+or auto-download from Open-Meteo (`--lat`/`--lon`).
 
 ---
 

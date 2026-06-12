@@ -152,13 +152,23 @@ Or see `examples/inference_from_db.py` for a complete inference example.
 
 ---
 
-## 6. Model lifecycle
+## 6. Model lifecycle and cleanup
 
 | Retention | Behavior |
 |-----------|----------|
 | `retention_days: 7` | Runs older than 7 days are auto-deleted after each training batch |
 | No previous model | Device auto-falls back to full retrain |
 | `--full-retrain` flag | Forces full retrain for all devices |
+| Feature count change | Auto-falls back to full retrain for that device |
+
+On-demand cleanup:
+
+```bash
+meter-forecast cleanup                           # delete runs older than 7 days
+meter-forecast cleanup --retention-days 3        # custom retention
+meter-forecast cleanup --device-id dev123        # single device
+meter-forecast cleanup --dry-run                 # preview without deleting
+```
 
 ---
 
@@ -171,3 +181,16 @@ Or see `examples/inference_from_db.py` for a complete inference example.
 | `XMinioStorageFull` | MinIO disk full — clean `data/minio/` or increase disk |
 | No metrics logged | `run` command doesn't log CV metrics by default — use `--cv` or check `train_mae_*` |
 | Models not in Models tab | Models are stored as artifacts, not registered. This is by design for incremental training |
+| Feature count mismatch | Previous model had different features (e.g. weather added). Auto-falls back to full retrain |
+| Connection pool warnings | Harmless — urllib3 creates new connections instead of reusing pooled ones at high parallelism |
+
+## 8. Parallelism
+
+Training runs per-device in parallel. Control via:
+
+```bash
+meter-forecast run -j 4          # 4 parallel devices
+meter-forecast run -j 1          # sequential (debugging)
+```
+
+Default from `TRAINING_N_JOBS` env var (default: 4). Set in `.env` or per-invocation with `-j`.

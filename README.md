@@ -34,7 +34,11 @@ meter-forecast evaluate --datasets-config datasets.yaml
 task run              # incremental retrain + forecast (auto-fallback to full retrain)
 task evaluate         # score yesterday's forecast against actuals
 task run:full         # force full retrain from scratch
+task cleanup          # delete MLflow runs older than 7 days
+task cleanup:dry      # preview what would be deleted
 ```
+
+Use `-j` to control parallelism: `task run -- -j 8 --cv`
 
 ## MLflow + MinIO
 
