@@ -19,9 +19,8 @@ def test_naive_yesterday_uses_value_24h_earlier(hourly_device):
     out = naive_forecast(hourly_device, "grid_import", origin, config, lag_hours=24)
     assert list(out.columns) == ["ts_hour", "horizon", "prediction"]
     first = out.iloc[0]
-    expected = float(
-        hourly_device.set_index("ts_hour").loc[first["ts_hour"] - pd.Timedelta(hours=24), "grid_import"]
-    )
+    lag_ts = first["ts_hour"] - pd.Timedelta(hours=24)
+    expected = float(hourly_device.set_index("ts_hour").loc[lag_ts, "grid_import"])
     assert first["prediction"] == pytest.approx(max(0.0, expected))
 
 
