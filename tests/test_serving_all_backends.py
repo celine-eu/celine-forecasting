@@ -1,3 +1,5 @@
+import importlib.util
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -6,9 +8,12 @@ pytest.importorskip("mlflow")
 
 from celine.meter_forecasting.core.config import load_config
 from celine.meter_forecasting.core.forecaster import get_forecaster
+from celine.meter_forecasting.models import ttm  # noqa: F401  (registers ttm)
 
 # Every backend whose optional extra is installed must round-trip through serving.
 BACKENDS = ["lightgbm"]
+if importlib.util.find_spec("tsfm_public") is not None:
+    BACKENDS.append("ttm")
 
 
 def _device_frame() -> pd.DataFrame:
