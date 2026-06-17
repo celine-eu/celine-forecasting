@@ -126,6 +126,19 @@ class FittedForecaster(Protocol):
 - **`baselines.py`** computes naive yesterday / last-week / 2-day over the same
   windows for direct comparison.
 
+### MLflow works for every backend (hard requirement)
+Tracking (`core/tracking.py`) and serving (`core/serving.py`) must be fully usable
+for **every** backend, not just LightGBM:
+- The `pyfunc` wrapper operates on `FittedForecaster` objects through the
+  interface — never on LightGBM internals.
+- Every `FittedForecaster` must be serialisable for logging (joblib-safe; neural
+  backends implement custom `__getstate__`/`__setstate__` or `save`/`load` so
+  torch weights round-trip).
+- Logged metadata records the backend `model_name`; on reload the right backend
+  is resolved via the registry.
+- A backend-parametrised MLflow round-trip test (log → load → predict) gates each
+  new backend.
+
 ## 5. Dependency isolation
 
 ```toml
@@ -180,4 +193,5 @@ Each step is a separately reviewable, independently-green commit. TDD throughout
 | Interface too LGB-shaped to fit sequence models | Interface operates at (device, target) granularity and hides horizon-band vs whole-horizon internals; validated in step 3 before any neural model. |
 | Heavy deps leak into core install | Lazy imports + optional extras + registry-level guard with a clear install message. |
 | Pooled vs per-device divergence | `scope` is a single parameter threaded through one pipeline, not parallel scripts. |
+| MLflow serving breaks for non-LGB backends | Serving/tracking operate on the `FittedForecaster` interface; metadata records `model_name`; every backend must be joblib-serialisable and is gated by a parametrised log→load→predict test. |
 ```

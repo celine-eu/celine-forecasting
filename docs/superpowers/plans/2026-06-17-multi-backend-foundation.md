@@ -15,6 +15,8 @@
 
 **Global conventions (from CLAUDE.md / AGENTS.md):** type hints on every function; Google-style docstrings; TDD (test first); run `uv run pytest` before every commit; run `uv run ruff check` before committing; conventional-commit messages; **never** add a `Co-Authored-By` trailer; energy values are kWh; no hardcoded paths.
 
+**Hard cross-cutting requirement — MLflow for ALL backends:** MLflow tracking (`core/tracking.py`) and serving (`core/serving.py`) must stay fully usable for *every* backend, not just LightGBM. The `pyfunc` wrapper operates on `FittedForecaster` objects through the interface; logged metadata records the backend `model_name` so the registry resolves the right backend on reload; every `FittedForecaster` must be joblib-serialisable (neural backends add custom `__getstate__`/`__setstate__`). Task 3.5 adds a backend-parametrised log→load→predict test that every future backend must extend.
+
 **Baseline command (run once, before Task 1.1, to confirm a green starting point):**
 ```bash
 uv sync --extra mlflow --extra db --extra dev
@@ -959,7 +961,7 @@ git mv reporting.py core/reporting.py
 cd -
 ```
 - `core/evaluation.py`: change `from .forecast import generate_forecast` and `from .model import …` to use the registry. Replace the per-origin call with a backend obtained once: add a `model: str = "lightgbm"` parameter to `run_backtest`, resolve `backend = get_forecaster(model)`, fit per (device, target) via `backend.fit(..., calibrate=True)` and predict via the fitted object; use `core.baselines.naive_forecast` for the naive comparison and `core.inference` where needed. Update sibling imports to `.config`, `.schema`, `.baselines`, `.forecaster`, `.inference`.
-- `core/serving.py`: change `from .cleaning …`/`from .config …` to `.` siblings (now inside core); change `from .forecast import forecast_records_from_bundle` to `from .inference import forecast_records_from_bundle`. The persisted bundle now holds `FittedForecaster` objects (joblib-picklable) — update `load_context`/`predict` accordingly.
+- `core/serving.py`: change `from .cleaning …`/`from .config …` to `.` siblings (now inside core); change `from .forecast import forecast_records_from_bundle` to `from .inference import forecast_records_from_bundle`. The persisted bundle now holds `FittedForecaster` objects (joblib-picklable) — update `load_context`/`predict` accordingly. **MLflow-for-all-backends:** `log_forecast_model(...)` gains a `model_name: str = "lightgbm"` argument and writes it into the persisted `metadata.json`; `load_context` reads `model_name` back (it is informational here since `predict` calls `fitted.predict(...)` polymorphically, but it lets future backends resolve backend-specific reload via `get_forecaster`). Keep the wrapper free of any LightGBM import. `tracking.log_models(...)` and the pipeline call site pass the active `model` name through.
 - `core/reporting.py`: change `from .pipeline import PipelineResult` to `from ..pipeline import PipelineResult`.
 - `core/tracking.py`: its lazy `from ..serving import log_forecast_model` becomes `from .serving import log_forecast_model` (serving now a sibling in core).
 
@@ -1063,6 +1065,106 @@ Expected: PASS. Then full suite green.
 ```bash
 git add -A
 git commit -m "feat: add --model/--scope flags to the CLI (default lightgbm/per_device)"
+```
+
+### Task 3.5: MLflow log → load → predict round-trip is backend-agnostic
+
+**Files:**
+- Test: `tests/test_serving_all_backends.py`
+- Modify (if needed): `src/celine/meter_forecasting/core/serving.py`
+
+This task locks in the "MLflow usable for ALL strategies" requirement with a
+parametrised test. Future backends append their name to `BACKENDS` and must pass.
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# tests/test_serving_all_backends.py
+import pandas as pd
+import pytest
+
+pytest.importorskip("mlflow")
+
+from celine.meter_forecasting.core.config import load_config
+from celine.meter_forecasting.core.forecaster import get_forecaster
+from celine.meter_forecasting.core.inference import forecast_records_from_bundle
+
+# Every backend whose optional extra is installed must round-trip through serving.
+BACKENDS = ["lightgbm"]
+
+
+def _device_frame():
+    import numpy as np
+
+    idx = pd.date_range("2026-01-01", periods=24 * 60, freq="h", tz="UTC")
+    return pd.DataFrame(
+        {
+            "ts_hour": idx,
+            "device_id": "dev-1",
+            "grid_import": np.tile(np.arange(24, dtype=float), 60) * 0.1 + 0.5,
+            "grid_export": np.maximum(0.0, np.sin(np.arange(len(idx)) / 12)),
+            "hour_sin": np.sin(2 * np.pi * idx.hour / 24),
+            "hour_cos": np.cos(2 * np.pi * idx.hour / 24),
+            "day_of_week": idx.weekday,
+            "month": idx.month,
+            "is_weekend": (idx.weekday >= 5).astype(int),
+        }
+    )
+
+
+@pytest.mark.parametrize("model_name", BACKENDS)
+def test_log_load_predict_roundtrip(model_name, tmp_path):
+    import mlflow
+
+    from celine.meter_forecasting.core.serving import log_forecast_model
+
+    config = load_config()
+    df = _device_frame()
+    backend = get_forecaster(model_name)
+    fitted = backend.fit(
+        df, "grid_import", df["ts_hour"].max(), config,
+        has_pv=False, available_columns=set(df.columns),
+    )
+    trained = {"dev-1": {"grid_import": fitted}}
+
+    mlflow.set_tracking_uri(f"sqlite:///{tmp_path / 'mlflow.db'}")
+    with mlflow.start_run():
+        info = log_forecast_model(
+            trained, config, export_eligible=set(), model_name=model_name
+        )
+    loaded = mlflow.pyfunc.load_model(info.model_uri)
+    out = loaded.predict(df)
+    assert isinstance(out, pd.DataFrame)
+    assert len(out) > 0
+```
+
+- [ ] **Step 2: Run it to verify it fails**
+
+Run: `uv run pytest tests/test_serving_all_backends.py -q`
+Expected: FAIL — `log_forecast_model` does not accept `model_name`, or the
+loaded model cannot predict generically. (Skips cleanly if `mlflow` is absent.)
+
+- [ ] **Step 3: Make serving accept and persist `model_name`, predict polymorphically**
+
+Apply the `core/serving.py` edits described in Task 3.3 Step 4: add `model_name`
+to `log_forecast_model`, persist it in `metadata.json`, and ensure `predict`
+builds records via `forecast_records_from_bundle` (which calls
+`fitted.predict(...)`), with no LightGBM import anywhere in the module.
+
+- [ ] **Step 4: Run the test**
+
+Run: `uv run pytest tests/test_serving_all_backends.py -q`
+Expected: PASS.
+
+- [ ] **Step 5: Full suite + commit**
+
+Run: `uv run pytest -q` — green.
+```bash
+git add -A
+git commit -m "test: backend-agnostic MLflow log/load/predict round-trip
+
+Persist model_name in served-model metadata and assert serving works through the
+FittedForecaster interface; parametrised so every future backend must pass."
 ```
 
 ---
@@ -1284,6 +1386,7 @@ Each follow-on plan is independently green and additive — it touches only its 
 - Spec §6 pooled/scope + CLI flags → Task 3.2 (scope param, LGB raises NotImplemented for pooled), Task 3.4 (CLI). Full pooled implementation deferred to the TTM plan, as flagged. ✓ (noted)
 - Spec §7 incremental migration order → Phases 1→4 mirror spec steps 1→4. ✓
 - Spec §8 backend-parametrized tests → Task 3.2 contract test (`isinstance(..., FittedForecaster)`); extended per-backend in follow-on plans. ✓
+- Spec §4 "MLflow works for every backend" → Task 3.3 (serving/tracking on the interface + `model_name` in metadata) and Task 3.5 (parametrised log→load→predict round-trip). ✓
 
 **Placeholder scan:** No TBD/TODO; every code step shows code; move steps give exact commands. The Task 3.3/3.4/4.2 "implement" steps describe edits to existing large functions with the exact imports and signatures to use rather than re-pasting the whole function — acceptable because the surrounding code is shown in the referenced files and the new signatures/columns are fully specified.
 
