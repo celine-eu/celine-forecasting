@@ -6,14 +6,21 @@ import pytest
 
 pytest.importorskip("mlflow")
 
+from celine.meter_forecasting import models  # noqa: F401  (registers all backends)
 from celine.meter_forecasting.core.config import load_config
 from celine.meter_forecasting.core.forecaster import get_forecaster
-from celine.meter_forecasting.models import ttm  # noqa: F401  (registers ttm)
 
-# Every backend whose optional extra is installed must round-trip through serving.
+# Every backend whose library is installed must round-trip through serving.
 BACKENDS = ["lightgbm"]
-if importlib.util.find_spec("tsfm_public") is not None:
-    BACKENDS.append("ttm")
+for _lib, _name in (
+    ("tsfm_public", "ttm"),
+    ("chronos", "chronos2"),
+    ("chronos", "chronos_bolt"),
+    ("timesfm", "timesfm25"),
+    ("uni2ts", "moirai"),
+):
+    if importlib.util.find_spec(_lib) is not None:
+        BACKENDS.append(_name)
 
 
 def _device_frame() -> pd.DataFrame:

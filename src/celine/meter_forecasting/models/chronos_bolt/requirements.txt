@@ -1,0 +1,4 @@
+chronos-forecasting
+torch
+transformers
+accelerate

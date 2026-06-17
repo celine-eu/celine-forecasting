@@ -230,6 +230,22 @@ backends:
     finetune: true                # fine-tune head+decoder (false = zero-shot)
     context_length: 512
     covariates: true
+  chronos2:
+    finetune: false               # foundation models default to zero-shot
+    context_length: 512
+    covariates: true
+  chronos_bolt:
+    finetune: false
+    context_length: 512
+    covariates: false             # Chronos-Bolt is univariate (no covariates)
+  timesfm25:
+    finetune: false
+    context_length: 512
+    covariates: true
+  moirai:
+    finetune: false
+    context_length: 512
+    covariates: true
 
 # ---------------------------------------------------------------------------
 # MLflow experiment tracking (pluggable)
