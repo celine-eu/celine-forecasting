@@ -223,6 +223,15 @@ bias_correction:
   enabled: true                   # report validation-derived bias-corrected MAE
 
 # ---------------------------------------------------------------------------
+# Neural backend settings (per-backend; selected via --model)
+# ---------------------------------------------------------------------------
+backends:
+  ttm:
+    finetune: true                # fine-tune head+decoder (false = zero-shot)
+    context_length: 512
+    covariates: true
+
+# ---------------------------------------------------------------------------
 # MLflow experiment tracking (pluggable)
 # ---------------------------------------------------------------------------
 tracking:
