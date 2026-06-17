@@ -21,6 +21,10 @@ dependencies = [
 [project.optional-dependencies]
 mlflow = ["mlflow>=2.10.0", "boto3>=1.28.0"]
 db = ["sqlalchemy>=2.0.0", "psycopg2-binary>=2.9.0"]
+# Neural backends are NOT pyproject extras: their deps conflict with each other
+# and have no wheels for the dev Python (3.13), which breaks uv's universal
+# resolution. Each backend ships its own models/<backend>/requirements.txt to be
+# installed into a SEPARATE Python 3.12 venv. See models/ttm/requirements.txt.
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.5.0",
