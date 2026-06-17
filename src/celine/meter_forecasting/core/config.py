@@ -1,6 +1,6 @@
 """Configuration loading for the meter-forecast pipeline.
 
-The YAML config (``config/default_config.yaml``) is the single place every
+The YAML config (``core/config_data/default_config.yaml``) is the single place every
 tunable lives. It is loaded into a lightweight, typed :class:`ForecastConfig`
 dataclass so the rest of the package never reaches into raw dictionaries.
 """
@@ -13,7 +13,7 @@ from typing import Any
 
 import yaml
 
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config" / "default_config.yaml"
+DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config_data" / "default_config.yaml"
 
 
 @dataclass
@@ -90,7 +90,7 @@ def load_config(
 
     Args:
         path: Path to a YAML config file. Defaults to the packaged
-            ``config/default_config.yaml``.
+            ``core/config_data/default_config.yaml``.
         overlay: Optional path to a second YAML config that is deep-merged
             on top of the base. For ``datasets.meters`` lists, the overlay's
             entries are *appended* (extend, not replace).

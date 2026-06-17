@@ -14,19 +14,18 @@ Examples:
 from __future__ import annotations
 
 import logging
-import sys
 from pathlib import Path
 from typing import Annotated, Optional
 
 import pandas as pd
 import typer
 
-from .cleaning import build_processed_hourly
-from .config import ForecastConfig, load_config
-from .io import load_meters, load_weather
+from .core.cleaning import build_processed_hourly
+from .core.config import ForecastConfig, load_config
+from .core.io import load_meters, load_weather
+from .core.schema import COL_TS_HOUR
+from .core.validation import InsufficientDataError, assess_sufficiency, eligibility_to_frame
 from .pipeline import train_pipeline
-from .schema import COL_TS_HOUR
-from .validation import InsufficientDataError, assess_sufficiency, eligibility_to_frame
 
 logger = logging.getLogger(__name__)
 
@@ -69,7 +68,7 @@ def _load_meters_from_opts(
 
     datasets = config.datasets
     if datasets and datasets.get("meters"):
-        from .db import build_engine, load_meters_from_db
+        from .core.db import build_engine, load_meters_from_db
 
         uri = db_uri or datasets.get("uri")
         engine = build_engine(uri)
@@ -100,7 +99,7 @@ def _resolve_weather(
 
     datasets = config.datasets
     if datasets and datasets.get("weather"):
-        from .db import build_engine, load_weather_from_db
+        from .core.db import build_engine, load_weather_from_db
 
         uri = db_uri or datasets.get("uri")
         engine = build_engine(uri)
@@ -110,8 +109,8 @@ def _resolve_weather(
         logger.info("No weather source configured — running weather-free.")
         return None
 
-    from .cleaning import aggregate_to_hourly
-    from .weather import download_weather_features
+    from .core.cleaning import aggregate_to_hourly
+    from .core.weather import download_weather_features
 
     hourly = aggregate_to_hourly(df_meters, config)
     start = hourly[COL_TS_HOUR].min()

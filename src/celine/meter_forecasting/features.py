@@ -14,8 +14,8 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from .config import ForecastConfig
-from .schema import COL_TS_HOUR
+from .core.config import ForecastConfig
+from .core.schema import COL_TS_HOUR
 
 logger = logging.getLogger(__name__)
 

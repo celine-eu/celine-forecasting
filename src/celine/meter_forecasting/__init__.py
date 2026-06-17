@@ -8,24 +8,24 @@ included; bring your own data shaped per :mod:`celine.meter_forecasting.schema`.
 
 from __future__ import annotations
 
-from .config import ForecastConfig, load_config
-from .ingest import normalize_meters
-from .io import load_meters, load_weather
-from .pipeline import PipelineResult, train_pipeline
-from .reporting import summarize_run
-from .schema import METER_CONTRACT, PROCESSED_CONTRACT, WEATHER_CONTRACT
-from .validation import (
+from .core.config import ForecastConfig, load_config
+from .core.ingest import normalize_meters
+from .core.io import load_meters, load_weather
+from .core.schema import METER_CONTRACT, PROCESSED_CONTRACT, WEATHER_CONTRACT
+from .core.validation import (
     DeviceEligibility,
     InsufficientDataError,
     SchemaError,
     assess_sufficiency,
     validate_raw_schema,
 )
-from .weather import (
+from .core.weather import (
     build_weather_features,
     download_raw_weather,
     download_weather_features,
 )
+from .pipeline import PipelineResult, train_pipeline
+from .reporting import summarize_run
 
 __version__ = "0.1.0"
 

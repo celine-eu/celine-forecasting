@@ -135,7 +135,7 @@ class MlflowTracker(BaseTracker):
             return None
         # Imported lazily: serving.py imports mlflow at module load, so the core
         # package never pulls it in on the no-op path.
-        from .serving import log_forecast_model
+        from ..serving import log_forecast_model
 
         return log_forecast_model(
             trained_models,

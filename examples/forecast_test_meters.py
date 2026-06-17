@@ -28,7 +28,7 @@ from pathlib import Path
 import pandas as pd
 
 from celine.meter_forecasting import load_config, load_meters, train_pipeline
-from celine.meter_forecasting.weather import download_weather_features
+from celine.meter_forecasting.core.weather import download_weather_features
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger("forecast_test_meters")

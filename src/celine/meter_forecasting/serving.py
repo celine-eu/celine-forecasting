@@ -18,13 +18,14 @@ from pathlib import Path
 from typing import Any
 
 import joblib
-import mlflow
 import pandas as pd
 from mlflow.models.signature import ModelSignature
 from mlflow.types import ColSpec, DataType, Schema
 
-from .cleaning import build_processed_hourly, prepare_weather
-from .config import load_config
+import mlflow
+
+from .core.cleaning import build_processed_hourly, prepare_weather
+from .core.config import load_config
 from .forecast import forecast_records_from_bundle
 
 _BUNDLE_FILE = "trained_models.pkl"

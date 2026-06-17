@@ -15,9 +15,9 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-from .config import ForecastConfig
+from .core.config import ForecastConfig
+from .core.schema import COL_DEVICE_ID, COL_GRID_EXPORT, COL_GRID_IMPORT, COL_TS_HOUR
 from .features import build_monotonic_constraints, get_features_for_target, prepare_training_data
-from .schema import COL_DEVICE_ID, COL_GRID_EXPORT, COL_GRID_IMPORT, COL_TS_HOUR
 
 logger = logging.getLogger(__name__)
 

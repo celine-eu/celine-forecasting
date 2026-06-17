@@ -5,7 +5,7 @@
 ## Structure
 
 - `src/celine/meter_forecasting/` - Core Python package (LightGBM + CQR, 18 modules)
-  - `src/celine/meter_forecasting/config/` - Default configuration
+  - `src/celine/meter_forecasting/core/config_data/` - Default configuration
 - `tests/` - Test suite
 - `examples/` - Usage examples
 - `docs/` - Data contracts and feature documentation

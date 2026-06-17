@@ -12,10 +12,10 @@ import logging
 import numpy as np
 import pandas as pd
 
-from .config import ForecastConfig
+from .core.config import ForecastConfig
+from .core.schema import COL_DEVICE_ID, COL_GRID_IMPORT, COL_TS_HOUR
 from .forecast import generate_forecast
 from .model import compute_eligibility, train_band_models
-from .schema import COL_DEVICE_ID, COL_GRID_IMPORT, COL_TS_HOUR
 
 logger = logging.getLogger(__name__)
 

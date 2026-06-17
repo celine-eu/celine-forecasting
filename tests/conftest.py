@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from celine.meter_forecasting.config import load_config
+from celine.meter_forecasting.core.config import load_config
 
 
 @pytest.fixture

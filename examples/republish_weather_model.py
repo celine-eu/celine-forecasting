@@ -20,7 +20,7 @@ import os
 import joblib
 import mlflow
 
-from celine.meter_forecasting.config import load_config
+from celine.meter_forecasting.core.config import load_config
 from celine.meter_forecasting.serving import log_forecast_model
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")

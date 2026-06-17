@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import numpy as np
 
-from celine.meter_forecasting.cleaning import build_processed_hourly
+from celine.meter_forecasting.core.cleaning import build_processed_hourly
+from celine.meter_forecasting.core.schema import COL_DEVICE_ID, COL_TS_HOUR
 from celine.meter_forecasting.features import (
     build_monotonic_constraints,
     get_features_for_target,
@@ -15,7 +16,6 @@ from celine.meter_forecasting.model import (
     lgb_param_sets,
     train_band_models,
 )
-from celine.meter_forecasting.schema import COL_DEVICE_ID, COL_TS_HOUR
 
 
 def test_grid_import_point_model_uses_tweedie(config):

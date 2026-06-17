@@ -10,14 +10,14 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from celine.meter_forecasting.cleaning import build_processed_hourly
-from celine.meter_forecasting.config import load_config
-from celine.meter_forecasting.model import compute_eligibility, train_band_models
-from celine.meter_forecasting.schema import (
+from celine.meter_forecasting.core.cleaning import build_processed_hourly
+from celine.meter_forecasting.core.config import load_config
+from celine.meter_forecasting.core.schema import (
     COL_DEVICE_ID,
     COL_GRID_IMPORT,
     COL_TS_HOUR,
 )
+from celine.meter_forecasting.model import compute_eligibility, train_band_models
 
 
 def test_split_input_bare_dataframe_is_weather_free():
@@ -109,7 +109,7 @@ def _train_weather_bundle(raw_meters, raw_weather, config):
 def test_weather_model_predicts_with_supplied_weather(raw_meters, raw_weather, tmp_path):
     """A weather-trained model reloads and predicts from a meters+weather dict."""
     mlflow = pytest.importorskip("mlflow")
-    from celine.meter_forecasting.tracking import get_tracker
+    from celine.meter_forecasting.core.tracking import get_tracker
 
     config = load_config()
     config.tracking = {
@@ -154,7 +154,7 @@ def test_forecast_records_from_bundle_produces_full_horizon(raw_meters, config):
 def test_log_models_roundtrip_predicts(raw_meters, tmp_path):
     """A logged pyfunc model reloads and produces forecasts from raw meters."""
     mlflow = pytest.importorskip("mlflow")
-    from celine.meter_forecasting.tracking import get_tracker
+    from celine.meter_forecasting.core.tracking import get_tracker
 
     config = load_config()
     config.tracking = {
@@ -189,7 +189,7 @@ def test_logged_model_has_output_signature(raw_meters, tmp_path):
     ``serving._io_signature``); the output schema is the consumer contract.
     """
     pytest.importorskip("mlflow")
-    from celine.meter_forecasting.tracking import get_tracker
+    from celine.meter_forecasting.core.tracking import get_tracker
 
     config = load_config()
     config.tracking = {
