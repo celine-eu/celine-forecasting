@@ -13,6 +13,7 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from .core.baselines import seasonal_naive_forecast  # noqa: F401  (re-exported for compatibility)
 from .core.config import ForecastConfig
 from .core.schema import COL_DEVICE_ID, COL_GRID_EXPORT, COL_GRID_IMPORT, COL_TS_HOUR
 from .features import get_features_for_target
@@ -163,32 +164,6 @@ def generate_forecast(
         }
     )
 
-
-def seasonal_naive_forecast(
-    df_device: pd.DataFrame,
-    target: str,
-    forecast_origin: pd.Timestamp,
-    config: ForecastConfig,
-) -> pd.DataFrame:
-    """Seasonal-naive baseline: value at the same hour 7 days earlier.
-
-    Args:
-        df_device: Single-device processed hourly history.
-        target: Target column name.
-        forecast_origin: Forecast origin timestamp.
-        config: Pipeline configuration (``forecast_horizon``).
-
-    Returns:
-        DataFrame with ``ts_hour, horizon, prediction``.
-    """
-    indexed = df_device.sort_values(COL_TS_HOUR).set_index(COL_TS_HOUR)
-    rows = []
-    for h in range(1, config.forecast_horizon + 1):
-        ft = forecast_origin + pd.Timedelta(hours=h)
-        naive_ts = ft - pd.Timedelta(days=7)
-        pred = max(0.0, indexed.loc[naive_ts, target]) if naive_ts in indexed.index else np.nan
-        rows.append({"ts_hour": ft, "horizon": h, "prediction": pred})
-    return pd.DataFrame(rows)
 
 
 def forecast_records_from_bundle(
