@@ -12,6 +12,7 @@ import logging
 import numpy as np
 import pandas as pd
 
+from .bias_correction import apply_per_horizon_bias_correction, compute_per_horizon_bias
 from .config import ForecastConfig
 from .forecaster import get_forecaster
 from .schema import COL_DEVICE_ID, COL_GRID_EXPORT, COL_GRID_IMPORT, COL_TS_HOUR
@@ -173,11 +174,17 @@ def run_backtest(
     return pd.DataFrame(records)
 
 
-def summarize_backtest(df_bt: pd.DataFrame) -> dict[str, pd.DataFrame]:
+def summarize_backtest(
+    df_bt: pd.DataFrame, config: ForecastConfig | None = None
+) -> dict[str, pd.DataFrame]:
     """Aggregate backtest rows into summary tables.
 
     Args:
         df_bt: Output of :func:`run_backtest`.
+        config: Optional pipeline configuration. When provided and
+            ``bias_correction.enabled`` is set, the ``by_device``/``by_target``
+            tables gain an ``mae_bias_corrected`` column (per-horizon bias fitted
+            on the earlier half of origins, applied to the later half).
 
     Returns:
         Dict with ``by_device``, ``by_target``, ``by_horizon`` summary frames
@@ -194,8 +201,57 @@ def summarize_backtest(df_bt: pd.DataFrame) -> dict[str, pd.DataFrame]:
         .apply(lambda g: calc_mae(g["actual"].values, g["prediction"].values))
         .reset_index(name="mae")
     )
+
+    if config is not None and config.raw.get("bias_correction", {}).get("enabled"):
+        bias_by_group = _bias_corrected_mae(df_bt)
+        if not bias_by_group.empty:
+            by_device = by_device.merge(bias_by_group, on=["device_id", "target"], how="left")
+            by_target = by_target.merge(
+                bias_by_group.groupby("target", as_index=False)["mae_bias_corrected"].mean(),
+                on="target",
+                how="left",
+            )
+
     return {
         "by_device": by_device.round(4),
         "by_target": by_target.round(4),
         "by_horizon": by_horizon.round(4),
     }
+
+
+def _bias_corrected_mae(df_bt: pd.DataFrame) -> pd.DataFrame:
+    """Per-(device, target) bias-corrected MAE from backtest rows.
+
+    For each (device, target) the backtest rows are reshaped into an
+    ``(n_origins, H)`` matrix; the per-horizon signed bias is fitted on the
+    earlier half of origins (a validation proxy) and applied to the later half,
+    and the MAE is measured on that corrected later half. Groups with fewer than
+    two complete origins yield ``NaN``.
+
+    Args:
+        df_bt: Output of :func:`run_backtest`.
+
+    Returns:
+        Frame with ``device_id, target, mae_bias_corrected`` (one row per group).
+    """
+    rows: list[dict] = []
+    for (device, target), block in df_bt.groupby(["device_id", "target"]):
+        preds = block.pivot_table(index="origin", columns="horizon", values="prediction")
+        actuals = block.pivot_table(index="origin", columns="horizon", values="actual")
+        cols = preds.columns.intersection(actuals.columns)
+        preds, actuals = preds[cols].sort_index(), actuals[cols].sort_index()
+        complete = preds.notna().all(axis=1) & actuals.notna().all(axis=1)
+        preds, actuals = preds[complete], actuals[complete]
+
+        mae_bc = float("nan")
+        if len(preds) >= 2:
+            n_val = len(preds) // 2
+            bias = compute_per_horizon_bias(
+                preds.iloc[:n_val].to_numpy(), actuals.iloc[:n_val].to_numpy()
+            )
+            corrected = apply_per_horizon_bias_correction(
+                preds.iloc[n_val:].to_numpy(), bias, clip_min=0.0
+            )
+            mae_bc = float(np.mean(np.abs(corrected - actuals.iloc[n_val:].to_numpy())))
+        rows.append({"device_id": device, "target": target, "mae_bias_corrected": mae_bc})
+    return pd.DataFrame(rows)

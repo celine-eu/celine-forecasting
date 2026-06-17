@@ -258,7 +258,7 @@ def train_pipeline(
                 model=model,
                 scope=scope,
             )
-            result.backtest_summary = summarize_backtest(result.backtest)
+            result.backtest_summary = summarize_backtest(result.backtest, config=config)
             if (
                 "by_target" in result.backtest_summary
                 and not result.backtest_summary["by_target"].empty

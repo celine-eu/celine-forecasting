@@ -217,6 +217,12 @@ backtest:
   warmup_days: 14                 # skip origins closer than this to series start
 
 # ---------------------------------------------------------------------------
+# Per-horizon bias correction (model-agnostic; Jensen-gap fix)
+# ---------------------------------------------------------------------------
+bias_correction:
+  enabled: true                   # report validation-derived bias-corrected MAE
+
+# ---------------------------------------------------------------------------
 # MLflow experiment tracking (pluggable)
 # ---------------------------------------------------------------------------
 tracking:
