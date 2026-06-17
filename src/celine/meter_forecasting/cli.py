@@ -46,6 +46,8 @@ DeviceIds = Annotated[Optional[list[str]], typer.Option(help="Only load these de
 Lat = Annotated[Optional[float], typer.Option(help="Site latitude — auto-download weather")]
 Lon = Annotated[Optional[float], typer.Option(help="Site longitude — auto-download weather")]
 Output = Annotated[Path, typer.Option(help="Output directory")]
+Model = Annotated[str, typer.Option(help="Forecasting backend: lightgbm (default)")]
+Scope = Annotated[str, typer.Option(help="Training scope: per_device (default) or pooled")]
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -147,6 +149,8 @@ def run(
     lon: Lon = None,
     output: Output = Path("meter_forecast_out"),
     cv: Annotated[bool, typer.Option(help="Also run cross-validation (slower)")] = False,
+    model: Model = "lightgbm",
+    scope: Scope = "per_device",
 ) -> None:
     """Easy one-shot: meter data in, forecasts out."""
     _setup_logging(verbose)
@@ -164,6 +168,7 @@ def run(
         result = train_pipeline(
             df_meters, cfg, df_weather=df_weather,
             do_cv=cv, do_backtest=False, output_dir=str(output),
+            model=model, scope=scope,
         )
     except InsufficientDataError as exc:
         typer.echo(str(exc), err=True)
@@ -225,6 +230,8 @@ def train(
     output: Output = ...,
     backtest: Annotated[bool, typer.Option(help="Also run the rolling backtest")] = False,
     no_cv: Annotated[bool, typer.Option(help="Skip cross-validation")] = False,
+    model: Model = "lightgbm",
+    scope: Scope = "per_device",
 ) -> None:
     """Train models and write forecasts."""
     _setup_logging(verbose)
@@ -242,6 +249,7 @@ def train(
         result = train_pipeline(
             df_meters, cfg, df_weather=df_weather,
             do_cv=not no_cv, do_backtest=backtest, output_dir=str(output),
+            model=model, scope=scope,
         )
     except InsufficientDataError as exc:
         typer.echo(str(exc), err=True)
