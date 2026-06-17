@@ -2,7 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from celine.meter_forecasting.core.baselines import naive_forecast
+from celine.meter_forecasting.core.baselines import naive_forecast, seasonal_naive_forecast
 from celine.meter_forecasting.core.config import load_config
 
 
@@ -29,3 +29,31 @@ def test_naive_last_week_uses_168h_lag(hourly_device):
     origin = hourly_device["ts_hour"].iloc[24 * 20 - 1]
     out = naive_forecast(hourly_device, "grid_import", origin, config, lag_hours=168)
     assert len(out) == config.forecast_horizon
+
+
+def test_missing_lagged_timestamp_yields_nan(hourly_device):
+    """When the lagged timestamp predates the history, the prediction is NaN."""
+    config = load_config()
+    # Origin at the very start: a 168h lookback falls before any data exists.
+    origin = hourly_device["ts_hour"].iloc[0]
+    out = naive_forecast(hourly_device, "grid_import", origin, config, lag_hours=168)
+    assert out["prediction"].isna().all()
+
+
+def test_duplicate_index_is_resolved_to_last(hourly_device):
+    """A duplicated history timestamp is de-duplicated (keep last) rather than raising."""
+    config = load_config()
+    dup = pd.concat([hourly_device, hourly_device.iloc[[100]]], ignore_index=True)
+    origin = hourly_device["ts_hour"].iloc[24 * 20 - 1]
+    # Must not raise despite the duplicate row.
+    out = naive_forecast(dup, "grid_import", origin, config, lag_hours=24)
+    assert len(out) == config.forecast_horizon
+
+
+def test_seasonal_naive_matches_168h_lag(hourly_device):
+    """The compatibility wrapper equals naive_forecast at a 168h lag."""
+    config = load_config()
+    origin = hourly_device["ts_hour"].iloc[24 * 20 - 1]
+    wrapped = seasonal_naive_forecast(hourly_device, "grid_import", origin, config)
+    direct = naive_forecast(hourly_device, "grid_import", origin, config, lag_hours=168)
+    pd.testing.assert_frame_equal(wrapped, direct)

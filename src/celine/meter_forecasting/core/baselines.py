@@ -53,6 +53,18 @@ def seasonal_naive_forecast(
     forecast_origin: pd.Timestamp,
     config: ForecastConfig,
 ) -> pd.DataFrame:
-    """Seasonal-naive baseline (same hour 7 days earlier). Thin wrapper over
-    :func:`naive_forecast` with ``lag_hours=168`` for backward compatibility."""
+    """Seasonal-naive baseline: the value at the same hour 7 days earlier.
+
+    Thin backward-compatible wrapper over :func:`naive_forecast` with
+    ``lag_hours=168``.
+
+    Args:
+        df_device: Single-device processed hourly history.
+        target: Target column name.
+        forecast_origin: Forecast origin timestamp; forecasts start at +1h.
+        config: Pipeline configuration (``forecast_horizon``).
+
+    Returns:
+        DataFrame with ``ts_hour, horizon, prediction``.
+    """
     return naive_forecast(df_device, target, forecast_origin, config, lag_hours=168)
