@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from .core.config import ForecastConfig
+from .core.cqr import compute_cqr_q
 from .core.schema import COL_DEVICE_ID, COL_GRID_EXPORT, COL_GRID_IMPORT, COL_TS_HOUR
 from .features import build_monotonic_constraints, get_features_for_target, prepare_training_data
 
@@ -99,23 +100,6 @@ def train_lgb_model(
         ],
     )
 
-
-def compute_cqr_q(scores: np.ndarray, alpha: float, min_samples: int = 30) -> float:
-    """Compute the CQR conformal correction from conformity scores.
-
-    Args:
-        scores: Conformity scores on the calibration set.
-        alpha: Miscoverage level (``1 - target_coverage``).
-        min_samples: Below this many scores, returns 0 (no correction).
-
-    Returns:
-        The conformal quantile correction.
-    """
-    n = len(scores)
-    if n < min_samples:
-        return 0.0
-    q_level = min(np.ceil((n + 1) * (1 - alpha)) / n, 1.0)
-    return float(np.quantile(scores, q_level))
 
 
 def compute_eligibility(df: pd.DataFrame, config: ForecastConfig) -> tuple[set[str], set[str]]:
