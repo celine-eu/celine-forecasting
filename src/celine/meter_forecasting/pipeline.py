@@ -16,18 +16,19 @@ import joblib
 import numpy as np
 import pandas as pd
 
+from .core.baselines import naive_forecast
 from .core.cleaning import build_processed_hourly, prepare_weather
 from .core.config import ForecastConfig, load_config
+from .core.evaluation import calc_mae, run_backtest, summarize_backtest
+from .core.forecaster import get_forecaster
+from .core.inference import forecast_records_from_bundle
 from .core.schema import COL_DEVICE_ID, COL_GRID_EXPORT, COL_GRID_IMPORT, COL_TS_HOUR
 from .core.tracking import get_tracker
-from .core.validation import assess_sufficiency, eligibility_to_frame
-from .evaluation import calc_mae, run_backtest, summarize_backtest
-from .forecast import (
-    forecast_records_from_bundle,
-    generate_forecast,
-    seasonal_naive_forecast,
+from .core.validation import (
+    assess_sufficiency,
+    compute_eligibility,
+    eligibility_to_frame,
 )
-from .model import compute_eligibility, train_band_models
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ class PipelineResult:
     """Artifacts produced by a pipeline run.
 
     Attributes:
-        trained_models: ``{device: {target: {band: model_bundle}}}``.
+        trained_models: ``{device: {target: FittedForecaster}}``.
         forecasts: ``{device: forecast_record}``.
         eligibility: Per-device sufficiency report.
         cv_results: Cross-validation skill table (may be empty).
@@ -70,6 +71,8 @@ def _cross_validate(
     target: str,
     config: ForecastConfig,
     *,
+    backend: Any,
+    scope: str,
     has_pv: bool,
     available_columns: set[str],
     weather_df: pd.DataFrame | None,
@@ -87,16 +90,11 @@ def _cross_validate(
         test_end = data_end - pd.Timedelta(hours=fold * test_hours)
         test_start = test_end - pd.Timedelta(hours=test_hours)
 
-        models = train_band_models(
-            dev,
-            target,
-            test_start,
-            config,
-            has_pv=has_pv,
-            available_columns=available_columns,
-            calibrate=False,
+        fitted = backend.fit(
+            dev, target, test_start, config,
+            scope=scope, has_pv=has_pv, available_columns=available_columns, calibrate=False,
         )
-        if models is None:
+        if fitted is None:
             continue
 
         origins = pd.date_range(
@@ -109,22 +107,18 @@ def _cross_validate(
             actuals = dev.loc[actual_mask, [COL_TS_HOUR, target]].set_index(COL_TS_HOUR)
             if len(actuals) < 24:
                 continue
-            fc = generate_forecast(
-                dev[dev[COL_TS_HOUR] <= origin],
-                target,
-                models,
-                origin,
-                config,
-                weather_df=weather_df,
-                has_pv=has_pv,
-                available_columns=available_columns,
+            fc = fitted.predict(
+                dev[dev[COL_TS_HOUR] <= origin], target, origin, config,
+                weather_df=weather_df, has_pv=has_pv, available_columns=available_columns,
             )
             merged = fc.set_index("ts_hour").join(actuals, rsuffix="_a").dropna()
             if len(merged) < 12:
                 continue
             maes.append(calc_mae(merged[target].values, merged["prediction"].values))
 
-            naive = seasonal_naive_forecast(dev[dev[COL_TS_HOUR] <= origin], target, origin, config)
+            naive = naive_forecast(
+                dev[dev[COL_TS_HOUR] <= origin], target, origin, config, lag_hours=168,
+            )
             naive_merged = naive.set_index("ts_hour").join(actuals, rsuffix="_a").dropna()
             if len(naive_merged) >= 12:
                 naive_maes.append(
@@ -147,6 +141,8 @@ def train_pipeline(
     do_cv: bool = True,
     do_backtest: bool = False,
     output_dir: str | Path | None = None,
+    model: str = "lightgbm",
+    scope: str = "per_device",
 ) -> PipelineResult:
     """Run the full forecasting pipeline.
 
@@ -157,6 +153,9 @@ def train_pipeline(
         do_cv: Run rolling-origin cross-validation for skill reporting.
         do_backtest: Run the (slower) leakage-free backtest.
         output_dir: If given, write models/forecasts/reports there.
+        model: Backend name resolved via :func:`get_forecaster`.
+        scope: Fitting scope passed to the backend (``"per_device"`` or
+            ``"pooled"``).
 
     Returns:
         A populated :class:`PipelineResult`.
@@ -167,6 +166,7 @@ def train_pipeline(
     config = config or load_config()
     np.random.seed(config.random_seed)
     tracker = get_tracker(config)
+    backend = get_forecaster(model)
 
     # 1. Clean -------------------------------------------------------------
     processed = build_processed_hourly(df_meters, config, df_weather=df_weather)
@@ -199,23 +199,21 @@ def train_pipeline(
                 if target == COL_GRID_IMPORT and device not in import_eligible:
                     continue
 
-                models = train_band_models(
-                    dev,
-                    target,
-                    df_train[COL_TS_HOUR].max(),
-                    config,
-                    has_pv=has_pv,
-                    available_columns=available_columns,
+                fitted = backend.fit(
+                    dev, target, df_train[COL_TS_HOUR].max(), config,
+                    scope=scope, has_pv=has_pv, available_columns=available_columns,
                 )
-                if models is None:
+                if fitted is None:
                     continue
-                result.trained_models[device][target] = models
+                result.trained_models[device][target] = fitted
 
                 if do_cv:
                     cv = _cross_validate(
                         dev,
                         target,
                         config,
+                        backend=backend,
+                        scope=scope,
                         has_pv=has_pv,
                         available_columns=available_columns,
                         weather_df=weather_prepared,
@@ -246,7 +244,7 @@ def train_pipeline(
 
         # 4b. Log the trained ensemble as a servable model -----------------
         result.logged_model = tracker.log_models(
-            result.trained_models, config, export_eligible=export_eligible
+            result.trained_models, config, export_eligible=export_eligible, model_name=model
         )
 
         # 5. Backtest (optional) ------------------------------------------
@@ -257,6 +255,8 @@ def train_pipeline(
                 devices=list(result.trained_models),
                 weather_df=weather_prepared,
                 available_columns=available_columns,
+                model=model,
+                scope=scope,
             )
             result.backtest_summary = summarize_backtest(result.backtest)
             if (
@@ -331,7 +331,7 @@ def _write_outputs(result: PipelineResult, processed: pd.DataFrame, output_dir: 
 
     # Plain-text summary for non-technical users (imported lazily to avoid a
     # circular import: reporting depends on PipelineResult).
-    from .reporting import write_summary
+    from .core.reporting import write_summary
 
     write_summary(result, str(out / "summary.txt"))
     if not result.cv_results.empty:

@@ -12,16 +12,17 @@ import pytest
 
 from celine.meter_forecasting.core.cleaning import build_processed_hourly
 from celine.meter_forecasting.core.config import load_config
+from celine.meter_forecasting.core.forecaster import get_forecaster
 from celine.meter_forecasting.core.schema import (
     COL_DEVICE_ID,
     COL_GRID_IMPORT,
     COL_TS_HOUR,
 )
-from celine.meter_forecasting.model import compute_eligibility, train_band_models
+from celine.meter_forecasting.core.validation import compute_eligibility
 
 
 def test_split_input_bare_dataframe_is_weather_free():
-    from celine.meter_forecasting.serving import _split_input
+    from celine.meter_forecasting.core.serving import _split_input
 
     df = pd.DataFrame(
         {"device_id": ["d"], "ts": [1], "consumption_kw": [0.1], "production_kw": [0.0]}
@@ -33,7 +34,7 @@ def test_split_input_bare_dataframe_is_weather_free():
 
 
 def test_split_input_dict_with_weather():
-    from celine.meter_forecasting.serving import _split_input
+    from celine.meter_forecasting.core.serving import _split_input
 
     m = pd.DataFrame({"device_id": ["d"]})
     w = pd.DataFrame({"datetime": [1]})
@@ -44,7 +45,7 @@ def test_split_input_dict_with_weather():
 
 
 def test_split_input_dict_without_weather_is_weather_free():
-    from celine.meter_forecasting.serving import _split_input
+    from celine.meter_forecasting.core.serving import _split_input
 
     m = pd.DataFrame({"device_id": ["d"]})
     meters, weather = _split_input({"meters": m})
@@ -54,7 +55,7 @@ def test_split_input_dict_without_weather_is_weather_free():
 
 
 def test_split_input_dict_missing_meters_raises():
-    from celine.meter_forecasting.serving import _split_input
+    from celine.meter_forecasting.core.serving import _split_input
 
     with pytest.raises(ValueError, match="meters"):
         _split_input({"weather": pd.DataFrame()})
@@ -70,7 +71,7 @@ def _train_consumption_bundle(raw_meters, config):
     export_eligible, _import_eligible = compute_eligibility(processed, config)
     device = "dev-B"  # consumption-only fixture device (no PV)
     dev = processed[processed[COL_DEVICE_ID] == device].copy()
-    models = train_band_models(
+    fitted = get_forecaster("lightgbm").fit(
         dev,
         COL_GRID_IMPORT,
         dev[COL_TS_HOUR].max(),
@@ -78,8 +79,8 @@ def _train_consumption_bundle(raw_meters, config):
         has_pv=False,
         available_columns=set(processed.columns),
     )
-    assert models is not None, "fixture should yield enough data to train"
-    trained = {device: {COL_GRID_IMPORT: models}}
+    assert fitted is not None, "fixture should yield enough data to train"
+    trained = {device: {COL_GRID_IMPORT: fitted}}
     return processed, trained, export_eligible
 
 
@@ -93,7 +94,7 @@ def _train_weather_bundle(raw_meters, raw_weather, config):
     export_eligible, _import_eligible = compute_eligibility(processed, config)
     device = "dev-B"
     dev = processed[processed[COL_DEVICE_ID] == device].copy()
-    models = train_band_models(
+    fitted = get_forecaster("lightgbm").fit(
         dev,
         COL_GRID_IMPORT,
         dev[COL_TS_HOUR].max(),
@@ -101,8 +102,8 @@ def _train_weather_bundle(raw_meters, raw_weather, config):
         has_pv=False,
         available_columns=set(processed.columns),
     )
-    assert models is not None, "weather fixture should yield enough data to train"
-    trained = {device: {COL_GRID_IMPORT: models}}
+    assert fitted is not None, "weather fixture should yield enough data to train"
+    trained = {device: {COL_GRID_IMPORT: fitted}}
     return trained, export_eligible
 
 
@@ -137,7 +138,7 @@ def test_weather_model_predicts_with_supplied_weather(raw_meters, raw_weather, t
 
 def test_forecast_records_from_bundle_produces_full_horizon(raw_meters, config):
     """The pure bundle→forecast helper returns a full-horizon record per device."""
-    from celine.meter_forecasting.forecast import forecast_records_from_bundle
+    from celine.meter_forecasting.core.inference import forecast_records_from_bundle
 
     processed, trained, export_eligible = _train_consumption_bundle(raw_meters, config)
 

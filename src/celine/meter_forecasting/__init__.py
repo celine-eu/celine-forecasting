@@ -8,9 +8,13 @@ included; bring your own data shaped per :mod:`celine.meter_forecasting.schema`.
 
 from __future__ import annotations
 
+# Importing the backends package registers the built-in forecaster backends
+# (e.g. "lightgbm") so get_forecaster can resolve them by name.
+from . import models  # noqa: F401  (side-effect import: registers backends)
 from .core.config import ForecastConfig, load_config
 from .core.ingest import normalize_meters
 from .core.io import load_meters, load_weather
+from .core.reporting import summarize_run
 from .core.schema import METER_CONTRACT, PROCESSED_CONTRACT, WEATHER_CONTRACT
 from .core.validation import (
     DeviceEligibility,
@@ -25,7 +29,6 @@ from .core.weather import (
     download_weather_features,
 )
 from .pipeline import PipelineResult, train_pipeline
-from .reporting import summarize_run
 
 __version__ = "0.1.0"
 

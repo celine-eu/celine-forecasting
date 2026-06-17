@@ -1,18 +1,11 @@
-"""Forecast generation with CQR-calibrated prediction intervals.
-
-Translation of the forecast-generation logic in
-``M1_meters/03_forecasting.ipynb`` (``generate_48h_forecast_lgb`` and the
-seasonal-naive baseline), made config-driven and weather-optional.
-"""
+"""Backend-agnostic assembly of per-device forecast records."""
 
 from __future__ import annotations
 
 import pandas as pd
 
-from .core.baselines import seasonal_naive_forecast  # noqa: F401  (re-exported for compatibility)
-from .core.config import ForecastConfig
-from .core.schema import COL_DEVICE_ID, COL_GRID_EXPORT, COL_GRID_IMPORT, COL_TS_HOUR
-from .models.lightgbm._predict import generate_forecast  # noqa: F401  (re-exported)
+from .config import ForecastConfig
+from .schema import COL_DEVICE_ID, COL_GRID_EXPORT, COL_GRID_IMPORT, COL_TS_HOUR
 
 
 def forecast_records_from_bundle(
@@ -26,22 +19,13 @@ def forecast_records_from_bundle(
 ) -> dict[str, dict]:
     """Generate per-device forecast records from a trained-model bundle.
 
-    This is the inference core shared by the training pipeline and the servable
-    MLflow model: given processed history and a ``{device: {target: bundle}}``
-    mapping, it produces one assembled record per device. Targets a device was
-    not trained on are filled with a zero forecast so every record spans the
-    full horizon.
-
     Args:
         processed: Processed hourly frame for one or more devices.
         config: Pipeline configuration.
-        trained_models: ``{device: {target: band_models}}`` (e.g. from
-            :func:`model.train_band_models`).
+        trained_models: ``{device: {target: FittedForecaster}}``.
         export_eligible: Devices treated as having PV (drives import features).
-        weather_df: Optional prepared weather frame (see
-            ``cleaning.prepare_weather``).
-        available_columns: Weather columns present; inferred from ``processed``
-            when omitted.
+        weather_df: Optional prepared weather frame.
+        available_columns: Weather columns present; inferred from ``processed`` when omitted.
 
     Returns:
         ``{device_id: forecast_record}`` for every device in ``trained_models``.
@@ -59,25 +43,19 @@ def forecast_records_from_bundle(
             "prediction_upper": 0.0,
         }
     )
-
     records: dict[str, dict] = {}
     for device, targets in trained_models.items():
         dev = processed[processed[COL_DEVICE_ID] == device].copy()
         has_pv = device in export_eligible
         per_target = {}
         for target in config.targets:
-            if target not in targets:
+            fitted = targets.get(target)
+            if fitted is None:
                 per_target[target] = zero_fc.copy()
                 continue
-            per_target[target] = generate_forecast(
-                dev,
-                target,
-                targets[target],
-                origin,
-                config,
-                weather_df=weather_df,
-                has_pv=has_pv,
-                available_columns=available_columns,
+            per_target[target] = fitted.predict(
+                dev, target, origin, config,
+                weather_df=weather_df, has_pv=has_pv, available_columns=available_columns,
             )
         records[device] = assemble_forecast_records(
             per_target.get(COL_GRID_EXPORT), per_target.get(COL_GRID_IMPORT), device, origin
@@ -105,7 +83,6 @@ def assemble_forecast_records(
     record = {"device_id": device_id, "forecast_origin": str(forecast_origin), "forecasts": []}
     if export_fc is None or import_fc is None or export_fc.empty or import_fc.empty:
         return record
-
     for idx in range(len(export_fc)):
         export_kwh = round(float(export_fc.iloc[idx]["prediction"]), 3)
         import_kwh = round(float(import_fc.iloc[idx]["prediction"]), 3)

@@ -169,7 +169,7 @@ def run(
         typer.echo(str(exc), err=True)
         raise typer.Exit(1)
 
-    from .reporting import summarize_run
+    from .core.reporting import summarize_run
 
     typer.echo("\n" + summarize_run(result))
     typer.echo(f"\nArtifacts written to {output}/ (forecasts.json, summary.txt).")

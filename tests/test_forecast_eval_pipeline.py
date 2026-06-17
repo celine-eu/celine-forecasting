@@ -7,13 +7,13 @@ import json
 import numpy as np
 import pandas as pd
 
+from celine.meter_forecasting.core.baselines import seasonal_naive_forecast
 from celine.meter_forecasting.core.cleaning import build_processed_hourly, prepare_weather
 from celine.meter_forecasting.core.config import load_config
+from celine.meter_forecasting.core.evaluation import calc_mae, calc_rmse, compute_metrics
+from celine.meter_forecasting.core.forecaster import get_forecaster
 from celine.meter_forecasting.core.schema import COL_DEVICE_ID, COL_TS_HOUR
 from celine.meter_forecasting.core.tracking import BaseTracker, get_tracker
-from celine.meter_forecasting.evaluation import calc_mae, calc_rmse, compute_metrics
-from celine.meter_forecasting.forecast import generate_forecast, seasonal_naive_forecast
-from celine.meter_forecasting.model import train_band_models
 from celine.meter_forecasting.pipeline import train_pipeline
 
 
@@ -39,13 +39,12 @@ def test_forecast_interval_ordering_and_nonneg(raw_meters, raw_weather, config):
     dev = processed[processed[COL_DEVICE_ID] == "dev-A"]
     origin = dev[COL_TS_HOUR].max()
     available = set(processed.columns)
-    models = train_band_models(
+    fitted = get_forecaster("lightgbm").fit(
         dev, "grid_export", origin, config, has_pv=True, available_columns=available
     )
-    fc = generate_forecast(
+    fc = fitted.predict(
         dev,
         "grid_export",
-        models,
         origin,
         config,
         weather_df=weather,

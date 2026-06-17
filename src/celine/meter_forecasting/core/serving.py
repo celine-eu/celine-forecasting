@@ -1,6 +1,6 @@
 """Servable MLflow ``pyfunc`` wrapper around a trained meter-forecast ensemble.
 
-The trained artefact is a ``{device: {target: band_models}}`` mapping — not a
+The trained artefact is a ``{device: {target: FittedForecaster}}`` mapping — not a
 single estimator — so it is logged as a custom :class:`mlflow.pyfunc.PythonModel`
 rather than via a flavour-specific ``log_model``. The packaged model reloads the
 ensemble plus its config and, given raw 15-minute meter readings, returns a flat
@@ -24,9 +24,9 @@ from mlflow.types import ColSpec, DataType, Schema
 
 import mlflow
 
-from .core.cleaning import build_processed_hourly, prepare_weather
-from .core.config import load_config
-from .forecast import forecast_records_from_bundle
+from .cleaning import build_processed_hourly, prepare_weather
+from .config import load_config
+from .inference import forecast_records_from_bundle
 
 _BUNDLE_FILE = "trained_models.pkl"
 _CONFIG_FILE = "config.yaml"
@@ -105,6 +105,7 @@ class MeterForecastModel(mlflow.pyfunc.PythonModel):
         with open(context.artifacts["metadata"], encoding="utf-8") as handle:
             meta = json.load(handle)
         self._export_eligible = set(meta.get("export_eligible", []))
+        self._model_name = meta.get("model_name", "lightgbm")
 
     def predict(
         self, context: Any, model_input: Any, params: dict | None = None
@@ -155,15 +156,17 @@ def log_forecast_model(
     export_eligible: set[str],
     register: bool = False,
     registered_name: str | None = None,
+    model_name: str = "lightgbm",
 ) -> Any:
     """Log the trained ensemble as a pyfunc model in the active MLflow run.
 
     Args:
-        trained_models: ``{device: {target: band_models}}`` bundle.
+        trained_models: ``{device: {target: FittedForecaster}}`` bundle.
         config: Pipeline configuration (its ``raw`` dict is persisted verbatim).
         export_eligible: PV-eligible device ids (needed at inference time).
         register: Whether to also create a registered-model version.
         registered_name: Registry name to use when ``register`` is true.
+        model_name: Backend name persisted into the model metadata.
 
     Returns:
         The :class:`mlflow.models.model.ModelInfo` returned by MLflow.
@@ -182,7 +185,8 @@ def log_forecast_model(
         with open(config_path, "w", encoding="utf-8") as handle:
             yaml.safe_dump(config.raw, handle, sort_keys=False)
         with open(meta_path, "w", encoding="utf-8") as handle:
-            json.dump({"export_eligible": sorted(export_eligible)}, handle)
+            meta = {"export_eligible": sorted(export_eligible), "model_name": model_name}
+            json.dump(meta, handle)
 
         return mlflow.pyfunc.log_model(
             name="model",

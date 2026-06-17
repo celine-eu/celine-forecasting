@@ -19,6 +19,8 @@ import pandas as pd
 from .config import ForecastConfig
 from .schema import (
     COL_DEVICE_ID,
+    COL_GRID_EXPORT,
+    COL_GRID_IMPORT,
     METER_CONTRACT,
     WEATHER_CONTRACT,
 )
@@ -235,3 +237,22 @@ def eligibility_to_frame(verdicts: list[DeviceEligibility]) -> pd.DataFrame:
             "reason": [v.reason for v in verdicts],
         }
     )
+
+
+def compute_eligibility(df: pd.DataFrame, config: ForecastConfig) -> tuple[set[str], set[str]]:
+    """Compute per-device export/import eligibility from mean activity.
+
+    Args:
+        df: Processed hourly frame (outliers already removed if desired).
+        config: Pipeline configuration (``sufficiency.*_min_mean_kwh``).
+
+    Returns:
+        ``(export_eligible, import_eligible)`` sets of device ids.
+    """
+    export_thr = float(config.sufficiency.get("export_min_mean_kwh", 0.01))
+    import_thr = float(config.sufficiency.get("import_min_mean_kwh", 0.01))
+    mean_export = df[df[COL_GRID_EXPORT].notna()].groupby(COL_DEVICE_ID)[COL_GRID_EXPORT].mean()
+    mean_import = df[df[COL_GRID_IMPORT].notna()].groupby(COL_DEVICE_ID)[COL_GRID_IMPORT].mean()
+    export_eligible = set(mean_export[mean_export >= export_thr].index)
+    import_eligible = set(mean_import[mean_import >= import_thr].index)
+    return export_eligible, import_eligible

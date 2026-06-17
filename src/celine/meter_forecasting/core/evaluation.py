@@ -12,10 +12,10 @@ import logging
 import numpy as np
 import pandas as pd
 
-from .core.config import ForecastConfig
-from .core.schema import COL_DEVICE_ID, COL_GRID_IMPORT, COL_TS_HOUR
-from .forecast import generate_forecast
-from .model import compute_eligibility, train_band_models
+from .config import ForecastConfig
+from .forecaster import get_forecaster
+from .schema import COL_DEVICE_ID, COL_GRID_EXPORT, COL_GRID_IMPORT, COL_TS_HOUR
+from .validation import compute_eligibility
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +85,8 @@ def run_backtest(
     devices: list[str],
     weather_df: pd.DataFrame | None = None,
     available_columns: set[str] | None = None,
+    model: str = "lightgbm",
+    scope: str = "per_device",
 ) -> pd.DataFrame:
     """Run a leakage-free rolling-origin backtest over the given devices.
 
@@ -94,6 +96,9 @@ def run_backtest(
         devices: Devices to backtest (typically the eligible set).
         weather_df: Optional UTC-indexed weather frame.
         available_columns: Weather columns present in the data.
+        model: Backend name resolved via :func:`get_forecaster`.
+        scope: Fitting scope passed to the backend (must match the trained model
+            so backtest metrics measure what was deployed).
 
     Returns:
         Tidy frame of per-(device, target, origin, horizon) actual/prediction
@@ -103,6 +108,7 @@ def run_backtest(
     n_origins = int(config.backtest.get("origins", 21))
     warmup = pd.Timedelta(days=int(config.backtest.get("warmup_days", 14)))
     export_eligible, import_eligible = compute_eligibility(df, config)
+    backend = get_forecaster(model)
 
     records: list[dict] = []
     for device in devices:
@@ -113,7 +119,7 @@ def run_backtest(
         has_pv = device in export_eligible
 
         for target in config.targets:
-            if target == "grid_export" and not has_pv:
+            if target == COL_GRID_EXPORT and not has_pv:
                 continue
             if target == COL_GRID_IMPORT and device not in import_eligible:
                 continue
@@ -124,26 +130,16 @@ def run_backtest(
                 if origin < dev[COL_TS_HOUR].min() + warmup:
                     continue
 
-                models = train_band_models(
-                    dev,
-                    target,
-                    origin,
-                    config,
-                    has_pv=has_pv,
-                    available_columns=available_columns,
+                fitted = backend.fit(
+                    dev, target, origin, config,
+                    scope=scope, has_pv=has_pv, available_columns=available_columns,
                 )
-                if models is None:
+                if fitted is None:
                     continue
 
-                fc = generate_forecast(
-                    dev[dev[COL_TS_HOUR] <= origin],
-                    target,
-                    models,
-                    origin,
-                    config,
-                    weather_df=weather_df,
-                    has_pv=has_pv,
-                    available_columns=available_columns,
+                fc = fitted.predict(
+                    dev[dev[COL_TS_HOUR] <= origin], target, origin, config,
+                    weather_df=weather_df, has_pv=has_pv, available_columns=available_columns,
                 )
                 if fc.empty:
                     continue

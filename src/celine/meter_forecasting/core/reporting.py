@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import pandas as pd
 
-from .pipeline import PipelineResult
+from ..pipeline import PipelineResult
 
 
 def summarize_run(result: PipelineResult) -> str:

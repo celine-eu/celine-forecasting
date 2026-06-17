@@ -58,7 +58,12 @@ class BaseTracker:
         """No-op."""
 
     def log_models(
-        self, trained_models: dict, config: ForecastConfig, *, export_eligible: set[str]
+        self,
+        trained_models: dict,
+        config: ForecastConfig,
+        *,
+        export_eligible: set[str],
+        model_name: str = "lightgbm",
     ) -> Any:
         """No-op; returns None."""
         return None
@@ -118,14 +123,20 @@ class MlflowTracker(BaseTracker):
         self._mlflow.log_artifact(str(path))
 
     def log_models(
-        self, trained_models: dict, config: ForecastConfig, *, export_eligible: set[str]
+        self,
+        trained_models: dict,
+        config: ForecastConfig,
+        *,
+        export_eligible: set[str],
+        model_name: str = "lightgbm",
     ) -> Any:
         """Log the trained ensemble as a servable pyfunc model.
 
         Args:
-            trained_models: ``{device: {target: band_models}}`` bundle.
+            trained_models: ``{device: {target: FittedForecaster}}`` bundle.
             config: Pipeline configuration (persisted with the model).
             export_eligible: PV-eligible device ids (needed for inference).
+            model_name: Backend name persisted into the model metadata.
 
         Returns:
             The MLflow ``ModelInfo``, or None if there is nothing to log.
@@ -135,7 +146,7 @@ class MlflowTracker(BaseTracker):
             return None
         # Imported lazily: serving.py imports mlflow at module load, so the core
         # package never pulls it in on the no-op path.
-        from ..serving import log_forecast_model
+        from .serving import log_forecast_model
 
         return log_forecast_model(
             trained_models,
@@ -143,6 +154,7 @@ class MlflowTracker(BaseTracker):
             export_eligible=export_eligible,
             register=self._register,
             registered_name=self._registered_name,
+            model_name=model_name,
         )
 
 
