@@ -10,10 +10,21 @@
     MLflow tracking + serving, and the `Forecaster` interface + backend registry
     (`core/forecaster.py`). `core/` never imports from `models/`.
   - `models/<strategy>/` - one folder per forecasting backend, each implementing
-    the `Forecaster` interface (currently `models/lightgbm/`; TTM / Chronos etc.
-    plug in the same way behind optional dependency extras).
+    the `Forecaster` interface (`models/lightgbm/`, `models/ttm/`; Chronos etc.
+    follow the same template).
+  - `models/neural_common/` - torch-free shared helpers for neural backends
+    (transform, windows, covariate channels, single-origin forecast assembly,
+    `NeuralFitted` save/load). Imports NO torch, so it stays usable in the dev env.
   - `pipeline.py` / `cli.py` - orchestration; resolve the backend via
     `get_forecaster(model)`.
+
+  **Neural backends** (TTM now; Chronos/TimesFM/Moirai to come) have mutually
+  conflicting deps and no wheels for the dev Python (3.13), so they are NOT
+  pyproject extras: each ships `models/<backend>/requirements.txt`, installed into
+  a **separate Python 3.12 venv** per backend. `core/` and `models/neural_common/`
+  stay torch-free; the torch-touching code is dependency-guarded (the registry
+  raises an actionable error when a backend's lib is absent) and verified with
+  `python -m celine.meter_forecasting.models.ttm.smoke_ttm` in that venv.
   - `core/config_data/` - Default configuration (`default_config.yaml`)
 - `tests/` - Test suite
 - `examples/` - Usage examples
