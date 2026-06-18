@@ -75,19 +75,87 @@ class TTMFitted(NeuralFitted):
     def _predict_window(
         self, ctx_target: np.ndarray, ctx_cov: np.ndarray, future_cov: np.ndarray
     ) -> np.ndarray:
-        """TORCH SEAM — run TTM over one context window, return horizon preds.
+        """Run TTM over one context window and return the horizon prediction.
 
-        Port from ``energy_forecasting.core.forecast_utils`` (the rolling-window
-        evaluation): log1p+standardize ``ctx_target`` via ``self._transform``,
-        assemble the TTM input with ``self._preprocessor`` (target + control +
-        conditional channels), run ``self._model``, then ``self._transform``-
-        inverse (``expm1``) the horizon prediction. Return a native-unit
-        ``np.ndarray`` of length ``forecast_horizon``.
+        Faithful port of the rolling-window forward pass in
+        ``energy_forecasting.core.forecast_utils``: the context target is mapped
+        into log space, the fitted ``TimeSeriesPreprocessor`` scales every
+        channel and orders them, a single ``ForecastDFDataset`` sample is run
+        through ``self._model``, and the scaled-log prediction is inverted via the
+        preprocessor's target scaler followed by ``expm1``.
+
+        Args:
+            ctx_target: Native-unit context target, shape ``[context_length]``.
+            ctx_cov: Context covariates, shape ``[context_length, n_cov]`` (column
+                order matches ``self._covariate_cols``).
+            future_cov: Known-future covariates, shape ``[horizon, n_cov]``.
+
+        Returns:
+            Native-unit horizon prediction, shape ``[horizon]``.
         """
-        raise NotImplementedError(
-            "TORCH SEAM: port the TTM forward pass from "
-            "energy_forecasting.core.forecast_utils (run in a [ttm] venv)"
+        import torch
+        from tsfm_public.toolkit.dataset import ForecastDFDataset
+
+        tsp = self._preprocessor
+        target = tsp.target_columns[0]  # type: ignore[attr-defined]
+        controls = list(self._covariate_cols)
+        context_length = int(ctx_target.shape[0])
+        horizon = int(future_cov.shape[0])
+
+        # Reconstruct the (context + horizon) frame the preprocessor expects. The
+        # target is carried on the log1p scale (matching the reference, where the
+        # TSP ``standard`` scaler is fit on log values); horizon target rows are
+        # placeholders the model does not consume. Controls are known across the
+        # whole window: context from history, horizon from ``future_cov``.
+        n_rows = context_length + horizon
+        timestamps = pd.date_range("2000-01-01", periods=n_rows, freq="h")
+        target_col = np.concatenate(
+            [np.log1p(np.asarray(ctx_target, dtype=float)), np.zeros(horizon)]
         )
+        frame = pd.DataFrame({"timestamp": timestamps, target: target_col})
+        if controls:
+            cov_all = np.vstack(
+                [np.asarray(ctx_cov, dtype=float), np.asarray(future_cov, dtype=float)]
+            )
+            for col_idx, col in enumerate(controls):
+                frame[col] = cov_all[:, col_idx]
+
+        scaled = tsp.preprocess(frame)  # type: ignore[attr-defined]
+        use_freq_token = bool(
+            getattr(self._model.config, "resolution_prefix_tuning", False)  # type: ignore[attr-defined]
+        )
+        dataset = ForecastDFDataset(
+            scaled,
+            id_columns=[],
+            timestamp_column="timestamp",
+            target_columns=[target],
+            conditional_columns=[],
+            control_columns=controls,
+            context_length=context_length,
+            prediction_length=horizon,
+            frequency_token=(
+                tsp.get_frequency_token(tsp.freq) if use_freq_token else None  # type: ignore[attr-defined]
+            ),
+        )
+        sample = dataset[0]
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        self._model.to(device)  # type: ignore[attr-defined]
+        self._model.eval()  # type: ignore[attr-defined]
+        inputs = {
+            key: value.unsqueeze(0).to(device)
+            for key, value in sample.items()
+            if hasattr(value, "unsqueeze")
+        }
+        with torch.no_grad():
+            output = self._model(**inputs)  # type: ignore[operator]
+
+        channel = int(getattr(tsp, "prediction_channel_indices", [0])[0] or 0)
+        scaled_log = output.prediction_outputs[0, :, channel].detach().cpu().numpy()
+
+        scaler = next(iter(tsp.target_scaler_dict.values()))  # type: ignore[attr-defined]
+        log_pred = scaler.inverse_transform(scaled_log.reshape(-1, 1)).flatten()
+        return np.expm1(log_pred)
 
     # --- NeuralFitted persistence (torch lazy-imported here) ---
     def _save_model(self, directory: Path) -> None:
@@ -167,20 +235,109 @@ def _build_ttm(
     scope: str,
     config: ForecastConfig,
 ) -> tuple[object, object]:
-    """TORCH SEAM — construct (and optionally fine-tune) the TTM model.
+    """Construct (and optionally fine-tune) the TTM model and its preprocessor.
 
-    Port from ``pipelines/gen1/forecast_consumption.py`` (per-device) and
-    ``pipelines/fleet/forecast_pooled_ttm.py`` (pooled): build a
-    ``TimeSeriesPreprocessor`` (target + ``control_columns``=weather/calendar +
-    ``conditional_columns``=target lags, ``id_columns=['device_id']`` when
-    ``scope=='pooled'``), ``get_model(TTM_MODEL_ID, prefer_longer_context=True)``,
-    then if ``settings['finetune']`` call ``finetune.finetune_ttm(...)`` else use
-    the zero-shot model. Return ``(model, preprocessor)``.
+    Faithful port of ``pipelines/gen1/forecast_consumption.py`` (per-device) and
+    ``pipelines/fleet/forecast_pooled_ttm.py`` (pooled). Unlike the reference,
+    celine's neural covariates carry no target-lag conditionals (the sequence
+    model sees the target history directly), so they all map to TTM
+    ``control_columns`` and ``conditional_columns`` is empty.
+
+    Args:
+        train: Training rows for this (device|group, target), time-sorted.
+        target: Target column name.
+        covariate_cols: Known-future covariate columns (weather + calendar).
+        settings: Resolved TTM settings (``finetune``, ``context_length``).
+        scope: ``"per_device"`` or ``"pooled"`` (the latter sets
+            ``id_columns=['device_id']`` for per-series scaling).
+        config: Pipeline configuration (``forecast_horizon``).
+
+    Returns:
+        Tuple ``(model, preprocessor)`` — the (zero-shot or fine-tuned) TTM model
+        and the fitted ``TimeSeriesPreprocessor``.
     """
-    raise NotImplementedError(
-        f"TORCH SEAM: build/fine-tune TTM ({TTM_MODEL_ID}) — port from "
-        "energy_forecasting gen1/fleet pipelines (run in a [ttm] venv)"
+    import torch
+    from tsfm_public import TimeSeriesPreprocessor, get_datasets
+    from tsfm_public.toolkit.get_model import get_model
+
+    from . import finetune as ttm_finetune
+
+    context_length = int(settings["context_length"])
+    prediction_length = int(config.forecast_horizon)
+    id_columns = ["device_id"] if scope == "pooled" else []
+
+    # log1p target on the model frame (the TSP ``standard`` scaler is fit on log
+    # values); native-unit actuals are recovered via ``expm1`` at predict time.
+    model_frame = train.sort_values(COL_TS_HOUR).reset_index(drop=True).copy()
+    model_frame = model_frame.rename(columns={COL_TS_HOUR: "timestamp"})
+    model_frame[target] = np.log1p(model_frame[target].to_numpy(dtype=float))
+
+    tsp = TimeSeriesPreprocessor(
+        timestamp_column="timestamp",
+        id_columns=id_columns,
+        target_columns=[target],
+        conditional_columns=[],
+        control_columns=list(covariate_cols),
+        context_length=context_length,
+        prediction_length=prediction_length,
+        scaling=True,
+        encode_categorical=False,
+        scaler_type="standard",
+        freq="h",
     )
+
+    model = get_model(
+        model_path=TTM_MODEL_ID,
+        context_length=context_length,
+        prediction_length=prediction_length,
+        num_input_channels=tsp.num_input_channels,
+        prediction_channel_indices=tsp.prediction_channel_indices,
+        freq_prefix_tuning=True,
+        freq="h",
+        prefer_l1_loss=True,
+        prefer_longer_context=True,
+        # Channel mixing ON so the control covariates reach the forecast head.
+        enable_forecast_channel_mixing=True,
+    )
+
+    # get_datasets fits the TSP scalers (on the train split) and returns the
+    # windowed datasets used for fine-tuning.
+    split_config = _split_indices(len(model_frame))
+    train_ds, valid_ds, _ = get_datasets(
+        tsp,
+        model_frame,
+        split_config,
+        use_frequency_token=model.config.resolution_prefix_tuning,
+    )
+
+    if settings["finetune"]:
+        # Freeze the backbone — train the decoder + head only (reference Fix #2).
+        for param in model.backbone.parameters():
+            param.requires_grad = False
+        profile = "gpu" if torch.cuda.is_available() else "cpu"
+        model = ttm_finetune.finetune_ttm(
+            model, train_ds, valid_ds, profile=profile, config=config
+        )
+
+    return model, tsp
+
+
+def _split_indices(total_rows: int) -> dict[str, list[int]]:
+    """70/15/15 train/valid/test boundaries (port of ``compute_split_indices``).
+
+    Args:
+        total_rows: Number of rows in the model frame.
+
+    Returns:
+        Mapping with ``train``/``valid``/``test`` ``[start, end]`` (end-exclusive).
+    """
+    train_end = int(total_rows * 0.70)
+    valid_end = int(total_rows * 0.85)
+    return {
+        "train": [0, train_end],
+        "valid": [train_end, valid_end],
+        "test": [valid_end, total_rows],
+    }
 
 
 # Single registration: torch-free, with the availability flag so
