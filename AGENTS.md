@@ -10,21 +10,34 @@
     MLflow tracking + serving, and the `Forecaster` interface + backend registry
     (`core/forecaster.py`). `core/` never imports from `models/`.
   - `models/<strategy>/` - one folder per forecasting backend, each implementing
-    the `Forecaster` interface (`models/lightgbm/`, `models/ttm/`; Chronos etc.
-    follow the same template).
+    the `Forecaster` interface: `models/lightgbm/`, `models/ttm/`,
+    `models/chronos_bolt/`, `models/chronos2/`, `models/timesfm25/`,
+    `models/moirai/`.
   - `models/neural_common/` - torch-free shared helpers for neural backends
     (transform, windows, covariate channels, single-origin forecast assembly,
     `NeuralFitted` save/load). Imports NO torch, so it stays usable in the dev env.
   - `pipeline.py` / `cli.py` - orchestration; resolve the backend via
     `get_forecaster(model)`.
 
-  **Neural backends** (TTM now; Chronos/TimesFM/Moirai to come) have mutually
-  conflicting deps and no wheels for the dev Python (3.13), so they are NOT
-  pyproject extras: each ships `models/<backend>/requirements.txt`, installed into
-  a **separate Python 3.12 venv** per backend. `core/` and `models/neural_common/`
-  stay torch-free; the torch-touching code is dependency-guarded (the registry
-  raises an actionable error when a backend's lib is absent) and verified with
-  `python -m celine.meter_forecasting.models.ttm.smoke_ttm` in that venv.
+  **Neural backends** (TTM, Chronos-Bolt, Chronos-2, TimesFM 2.5, Moirai) have
+  mutually conflicting deps and no wheels for the dev Python (3.13), so they are
+  NOT pyproject extras: each ships `models/<backend>/requirements.txt`, installed
+  into a **separate Python 3.12 venv** per backend. `core/` and
+  `models/neural_common/` stay torch-free; the torch-touching code is
+  dependency-guarded (the registry raises an actionable error when a backend's lib
+  is absent) and verified with
+  `python -m celine.meter_forecasting.models.<backend>.smoke_<backend>` in that venv.
+
+  Backend status (torch seams are ported from the IBM `energy_forecasting`
+  reference and run on the GPU box — they cannot execute in the torch-free dev env):
+  - **ttm** — fit / fine-tune / predict; verified on the RTX 3080.
+  - **chronos_bolt / chronos2 / timesfm25 / moirai** — zero-shot inference +
+    persistence implemented (chronos2 & moirai use covariates; bolt & timesfm are
+    univariate). Pending GPU smoke verification. In-adapter fine-tune is NOT wired
+    for these four (the reference treats them as zero-shot, or fine-tunes via a
+    separate bespoke driver); their `finetune.py` raises with a pointer. The
+    config `backends.<name>.finetune` flag defaults to zero-shot accordingly.
+    See `TODO.md` for the per-backend verification checklist.
   - `core/config_data/` - Default configuration (`default_config.yaml`)
 - `tests/` - Test suite
 - `examples/` - Usage examples

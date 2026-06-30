@@ -10,6 +10,7 @@ IBM reference: benchmark/models/chronos2/runner.py
 from __future__ import annotations
 
 import importlib.util
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +23,9 @@ from ..neural_common.covariates import resolve_covariate_columns
 from ..neural_common.persistence import NeuralFitted
 from ..neural_common.predict import predict_forecast_frame
 from ..neural_common.transform import LogStandardizeTransform
-from .config import settings
+from .config import MODEL_ID, settings
+
+logger = logging.getLogger(__name__)
 
 _AVAILABLE = importlib.util.find_spec("chronos") is not None
 
@@ -69,19 +72,68 @@ class Chronos2Fitted(NeuralFitted):
     def _predict_window(
         self, ctx_target: np.ndarray, ctx_cov: np.ndarray, future_cov: np.ndarray
     ) -> np.ndarray:
-        """TORCH SEAM — run Chronos2 over one window; return horizon preds.
+        """Run Chronos-2 over one window and return the horizon prediction.
 
-        Transform ``ctx_target``, run the chronos pipeline (covariates where the
-        model supports them), then inverse-transform. See the module docstring
-        for the IBM reference to port.
+        Faithful port of the zero-shot forward pass in
+        ``benchmark/models/chronos2/runner.py``. Chronos-2 natively accepts
+        past/future covariates via a dict input. The context target is mapped
+        into standardized-log space, the median (q=0.5) quantile forecast is
+        taken, and the result is inverted back to native units.
+
+        Args:
+            ctx_target: Native-unit context target, shape ``[context_length]``.
+            ctx_cov: Context covariates, shape ``[context_length, n_cov]`` (column
+                order matches ``self._covariate_cols``).
+            future_cov: Known-future covariates, shape ``[horizon, n_cov]``.
+
+        Returns:
+            Native-unit horizon prediction, shape ``[horizon]``.
         """
-        raise NotImplementedError("TORCH SEAM: port Chronos2 inference (see module docstring)")
+        import torch
+
+        horizon = int(future_cov.shape[0])
+        scaled = self._transform.transform(np.asarray(ctx_target, dtype=float))
+        context = np.asarray(scaled[-self._context_length :], dtype=np.float32)
+
+        model_input: np.ndarray | dict[str, object]
+        if self._covariate_cols:
+            past = np.asarray(ctx_cov[-len(context) :], dtype=np.float32)
+            future = np.asarray(future_cov, dtype=np.float32)
+            model_input = {
+                "target": context,
+                "past_covariates": {
+                    col: past[:, i] for i, col in enumerate(self._covariate_cols)
+                },
+                "future_covariates": {
+                    col: future[:, i] for i, col in enumerate(self._covariate_cols)
+                },
+            }
+        else:
+            model_input = context
+
+        # Chronos-2 returns a list of (n_variates, horizon, n_q) tensors, one per
+        # task; our target is 1-d so n_variates == 1.
+        qt_list, _ = self._model.predict_quantiles(  # type: ignore[attr-defined]
+            [model_input],
+            prediction_length=horizon,
+            quantile_levels=[0.5],
+        )
+        median = qt_list[0].squeeze(0)[:, 0].to(torch.float32).cpu().numpy()
+        return self._transform.inverse(median)
 
     def _save_model(self, directory: Path) -> None:
-        raise NotImplementedError("TORCH SEAM: port Chronos2 save (see module docstring)")
+        # Chronos2Pipeline wraps a HF PreTrainedModel at ``.model``.
+        self._model.model.save_pretrained(directory / "model")  # type: ignore[attr-defined]
 
     def _load_model(self, directory: Path) -> None:
-        raise NotImplementedError("TORCH SEAM: port Chronos2 load (see module docstring)")
+        import torch
+        from chronos import Chronos2Pipeline  # lazy
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        dtype = torch.bfloat16 if device == "cuda" else torch.float32
+        self._model = Chronos2Pipeline.from_pretrained(
+            str(directory / "model"), device_map=device, dtype=dtype
+        )
 
     def _state_meta(self) -> dict:
         return {
@@ -146,12 +198,37 @@ def _build_chronos2(
     scope: str,
     config: ForecastConfig,
 ) -> object:
-    """TORCH SEAM — load (and optionally fine-tune) Chronos2.
+    """Load the Chronos-2 pipeline (zero-shot) on GPU when available.
 
-    Port from the IBM reference named in the module docstring; fine-tune when
-    ``cfg['finetune']`` is set.
+    Faithful port of ``chronos2/runner.load_pipeline``: GPU + bfloat16 when CUDA
+    is present, else CPU + float32. In-adapter fine-tuning is not wired (the IBM
+    reference fine-tunes via a separate pooled-benchmark driver using
+    ``Chronos2Pipeline.fit``); when ``cfg['finetune']`` is set this logs a
+    warning and returns the zero-shot pipeline.
+
+    Args:
+        train: Training rows (unused for zero-shot).
+        target: Target column name (unused for zero-shot).
+        covariate_cols: Covariate columns (used at predict time, not load).
+        cfg: Resolved Chronos2 settings.
+        scope: ``"per_device"`` or ``"pooled"`` (unused — one shared checkpoint).
+        config: Pipeline configuration (unused for zero-shot).
+
+    Returns:
+        The loaded ``Chronos2Pipeline``.
     """
-    raise NotImplementedError("TORCH SEAM: build Chronos2 (see module docstring)")
+    import torch
+    from chronos import Chronos2Pipeline
+
+    if cfg["finetune"]:
+        logger.warning(
+            "chronos2 in-adapter fine-tune is not wired; using the zero-shot "
+            "pipeline. Fine-tune via the IBM benchmark driver (Chronos2Pipeline.fit)."
+        )
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.bfloat16 if device == "cuda" else torch.float32
+    return Chronos2Pipeline.from_pretrained(MODEL_ID, device_map=device, dtype=dtype)
 
 
 register_backend(Chronos2Forecaster, available=_AVAILABLE)

@@ -1,7 +1,10 @@
-"""Moirai fine-tuning loop (torch-free import; lazy torch inside the function).
+"""Moirai fine-tuning — not wired into the adapter (used zero-shot).
 
-IBM reference to port:
-benchmark/models/moirai/runner.py (uni2ts fine-tune API)
+The IBM reference (``benchmark/models/moirai/runner.py``) evaluates Moirai
+zero-shot only; ``uni2ts`` fine-tuning runs through its own Lightning training
+CLI, not an in-process call. It is not wired into this per-cell adapter;
+``forecaster._build_moirai`` builds the zero-shot predictor and warns when
+``finetune`` is requested.
 """
 
 from __future__ import annotations
@@ -10,17 +13,18 @@ from typing import Any
 
 
 def finetune(model: Any, train_frame: Any, *, profile: str, config: Any) -> Any:
-    """Fine-tune Moirai and return the fine-tuned model.
+    """Raise — Moirai in-adapter fine-tuning is not wired (see module docstring).
 
     Args:
-        model: A loaded Moirai model/pipeline.
-        train_frame: Training rows for this (device|group, target).
-        profile: ``"cpu"`` or ``"gpu"`` training profile.
-        config: Pipeline configuration.
+        model: A loaded Moirai predictor.
+        train_frame: Training rows (unused).
+        profile: ``"cpu"`` or ``"gpu"`` training profile (unused).
+        config: Pipeline configuration (unused).
 
-    Returns:
-        The fine-tuned model.
-
-    TORCH SEAM — port the loop from the IBM reference named in the module docstring.
+    Raises:
+        NotImplementedError: Always — fine-tune via the uni2ts training CLI.
     """
-    raise NotImplementedError("TORCH SEAM: port Moirai fine-tune (see module docstring)")
+    raise NotImplementedError(
+        "Moirai in-adapter fine-tuning is not wired; fine-tune via the uni2ts "
+        "training CLI and load the checkpoint."
+    )

@@ -10,6 +10,7 @@ IBM reference: benchmark/models/timesfm25/runner.py
 from __future__ import annotations
 
 import importlib.util
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +23,13 @@ from ..neural_common.covariates import resolve_covariate_columns
 from ..neural_common.persistence import NeuralFitted
 from ..neural_common.predict import predict_forecast_frame
 from ..neural_common.transform import LogStandardizeTransform
-from .config import settings
+from .config import MODEL_ID, settings
+
+logger = logging.getLogger(__name__)
+
+# Quantile slot in TimesFM's 10-wide output axis [mean, q0.1, ..., q0.9]; the
+# median (q0.5) is slot 5 (verified by the reference monotonicity probe).
+_MEDIAN_SLOT = 5
 
 _AVAILABLE = importlib.util.find_spec("timesfm") is not None
 
@@ -69,19 +76,65 @@ class TimesFM25Fitted(NeuralFitted):
     def _predict_window(
         self, ctx_target: np.ndarray, ctx_cov: np.ndarray, future_cov: np.ndarray
     ) -> np.ndarray:
-        """TORCH SEAM — run TimesFM25 over one window; return horizon preds.
+        """Run TimesFM 2.5 over one window and return the horizon prediction.
 
-        Transform ``ctx_target``, run the timesfm pipeline (covariates where the
-        model supports them), then inverse-transform. See the module docstring
-        for the IBM reference to port.
+        Faithful port of the zero-shot forward pass in
+        ``benchmark/models/timesfm25/runner.py``. TimesFM 2.5 (torch) exposes no
+        stable covariate path, so it is run univariate (covariate arrays are
+        ignored). The decode graph is compiled lazily on first use for this
+        backend's fixed (context, horizon) geometry. TimesFM rejects NaN inputs,
+        so the context is gap-filled. The median (slot 5) quantile is taken and
+        inverted back to native units.
+
+        Args:
+            ctx_target: Native-unit context target, shape ``[context_length]``.
+            ctx_cov: Context covariates — ignored (no stable covariate path).
+            future_cov: Known-future covariates — ignored; its length gives the
+                forecast horizon.
+
+        Returns:
+            Native-unit horizon prediction, shape ``[horizon]``.
         """
-        raise NotImplementedError("TORCH SEAM: port TimesFM25 inference (see module docstring)")
+        import timesfm
+
+        horizon = int(future_cov.shape[0])
+        if not getattr(self, "_compiled", False):
+            self._model.compile(  # type: ignore[attr-defined]
+                timesfm.ForecastConfig(
+                    max_context=self._context_length,
+                    max_horizon=horizon,
+                    normalize_inputs=True,
+                    use_continuous_quantile_head=True,
+                    fix_quantile_crossing=True,
+                )
+            )
+            self._compiled = True
+
+        scaled = self._transform.transform(np.asarray(ctx_target, dtype=float))
+        context = pd.Series(scaled[-self._context_length :])
+        context_arr = context.ffill().bfill().fillna(0.0).to_numpy(dtype=np.float32)
+
+        _, quantiles = self._model.forecast(horizon=horizon, inputs=[context_arr])  # type: ignore[attr-defined]
+        # quantiles: (1, horizon, 10) = [mean, q0.1, ..., q0.9]; slot 5 = median.
+        median = np.asarray(quantiles)[0, :horizon, _MEDIAN_SLOT]
+        return self._transform.inverse(median)
 
     def _save_model(self, directory: Path) -> None:
-        raise NotImplementedError("TORCH SEAM: port TimesFM25 save (see module docstring)")
+        # Zero-shot uses the fixed HF checkpoint; weights are reloaded from
+        # MODEL_ID on load. Only the lightweight meta (scalars) is persisted.
+        (directory / "model").mkdir(parents=True, exist_ok=True)
 
     def _load_model(self, directory: Path) -> None:
-        raise NotImplementedError("TORCH SEAM: port TimesFM25 load (see module docstring)")
+        import timesfm
+        import torch
+
+        model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(MODEL_ID)
+        inner = model.model
+        if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+            if next(inner.parameters()).device.type != "cuda":
+                inner.to("cuda")
+        self._model = model
+        self._compiled = False  # recompiled lazily on first predict
 
     def _state_meta(self) -> dict:
         return {
@@ -146,12 +199,40 @@ def _build_timesfm25(
     scope: str,
     config: ForecastConfig,
 ) -> object:
-    """TORCH SEAM — load (and optionally fine-tune) TimesFM25.
+    """Load the TimesFM 2.5 (200M torch) model (zero-shot) on GPU when available.
 
-    Port from the IBM reference named in the module docstring; fine-tune when
-    ``cfg['finetune']`` is set.
+    Faithful port of ``timesfm25/runner.load_model``: load from the HF model id
+    and move the inner module to CUDA when present. The decode graph is compiled
+    lazily at predict time. In-adapter fine-tuning is not wired (the IBM
+    reference uses a bespoke custom training loop); when ``cfg['finetune']`` is
+    set this logs a warning and returns the zero-shot model.
+
+    Args:
+        train: Training rows (unused — zero-shot).
+        target: Target column name (unused).
+        covariate_cols: Covariate columns (unused — TimesFM 2.5 is univariate).
+        cfg: Resolved TimesFM25 settings.
+        scope: ``"per_device"`` or ``"pooled"`` (unused — one shared checkpoint).
+        config: Pipeline configuration (unused).
+
+    Returns:
+        The loaded (uncompiled) TimesFM 2.5 wrapper.
     """
-    raise NotImplementedError("TORCH SEAM: build TimesFM25 (see module docstring)")
+    import timesfm
+    import torch
+
+    if cfg["finetune"]:
+        logger.warning(
+            "timesfm25 in-adapter fine-tune is not wired (the IBM reference uses "
+            "a bespoke custom training loop); using the zero-shot model."
+        )
+
+    model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(MODEL_ID)
+    inner = model.model
+    if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+        if next(inner.parameters()).device.type != "cuda":
+            inner.to("cuda")
+    return model
 
 
 register_backend(TimesFM25Forecaster, available=_AVAILABLE)

@@ -1,4 +1,7 @@
-chronos-forecasting
+# Pinned to the versions the Chronos2 seam was ported against (API drifts).
+# Chronos-2 ships in chronos-forecasting (Chronos2Pipeline). Install a CUDA torch
+# wheel first (see AGENTS.md), then this file.
+chronos-forecasting==2.2.2
 torch
 transformers
 accelerate

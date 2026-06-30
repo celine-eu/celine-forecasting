@@ -1,7 +1,9 @@
-"""ChronosBolt fine-tuning loop (torch-free import; lazy torch inside the function).
+"""ChronosBolt fine-tuning — unsupported (the model is used zero-shot).
 
-IBM reference to port:
-benchmark/models/chronos_bolt/runner.py (Bolt is univariate)
+The IBM reference (``benchmark/models/chronos_bolt/runner.py``) evaluates
+Chronos-Bolt zero-shot only; in-process fine-tuning is not part of the
+``chronos`` package's public API. ``forecaster._build_chronos_bolt`` therefore
+never calls this function and falls back to the zero-shot pipeline.
 """
 
 from __future__ import annotations
@@ -10,17 +12,17 @@ from typing import Any
 
 
 def finetune(model: Any, train_frame: Any, *, profile: str, config: Any) -> Any:
-    """Fine-tune ChronosBolt and return the fine-tuned model.
+    """Raise — ChronosBolt is zero-shot only (see module docstring).
 
     Args:
-        model: A loaded ChronosBolt model/pipeline.
-        train_frame: Training rows for this (device|group, target).
-        profile: ``"cpu"`` or ``"gpu"`` training profile.
-        config: Pipeline configuration.
+        model: A loaded ChronosBolt pipeline.
+        train_frame: Training rows (unused).
+        profile: ``"cpu"`` or ``"gpu"`` training profile (unused).
+        config: Pipeline configuration (unused).
 
-    Returns:
-        The fine-tuned model.
-
-    TORCH SEAM — port the loop from the IBM reference named in the module docstring.
+    Raises:
+        NotImplementedError: Always — Chronos-Bolt has no in-process fine-tune.
     """
-    raise NotImplementedError("TORCH SEAM: port ChronosBolt fine-tune (see module docstring)")
+    raise NotImplementedError(
+        "ChronosBolt is zero-shot only; in-process fine-tuning is not supported."
+    )

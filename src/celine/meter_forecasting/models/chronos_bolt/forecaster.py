@@ -10,6 +10,7 @@ IBM reference: benchmark/models/chronos_bolt/runner.py
 from __future__ import annotations
 
 import importlib.util
+import logging
 from pathlib import Path
 
 import numpy as np
@@ -22,7 +23,9 @@ from ..neural_common.covariates import resolve_covariate_columns
 from ..neural_common.persistence import NeuralFitted
 from ..neural_common.predict import predict_forecast_frame
 from ..neural_common.transform import LogStandardizeTransform
-from .config import settings
+from .config import MODEL_ID, settings
+
+logger = logging.getLogger(__name__)
 
 _AVAILABLE = importlib.util.find_spec("chronos") is not None
 
@@ -69,19 +72,52 @@ class ChronosBoltFitted(NeuralFitted):
     def _predict_window(
         self, ctx_target: np.ndarray, ctx_cov: np.ndarray, future_cov: np.ndarray
     ) -> np.ndarray:
-        """TORCH SEAM — run ChronosBolt over one window; return horizon preds.
+        """Run ChronosBolt over one window and return the horizon prediction.
 
-        Transform ``ctx_target``, run the chronos pipeline (covariates where the
-        model supports them), then inverse-transform. See the module docstring
-        for the IBM reference to port.
+        Faithful port of the zero-shot forward pass in
+        ``benchmark/models/chronos_bolt/runner.py``. Bolt is univariate, so the
+        covariate arrays are ignored. The context target is mapped into
+        standardized-log space, the pipeline's median (q=0.5) quantile forecast
+        is taken, and the result is inverted back to native units.
+
+        Args:
+            ctx_target: Native-unit context target, shape ``[context_length]``.
+            ctx_cov: Context covariates — ignored (Bolt is univariate).
+            future_cov: Known-future covariates — ignored; its length gives the
+                forecast horizon.
+
+        Returns:
+            Native-unit horizon prediction, shape ``[horizon]``.
         """
-        raise NotImplementedError("TORCH SEAM: port ChronosBolt inference (see module docstring)")
+        import torch
+
+        horizon = int(future_cov.shape[0])
+        scaled = self._transform.transform(np.asarray(ctx_target, dtype=float))
+        context = torch.tensor(
+            np.asarray(scaled[-self._context_length :], dtype=np.float32)
+        )
+        # chronos-forecasting >= 2.x renamed ``context`` to ``inputs``.
+        quantiles, _ = self._model.predict_quantiles(  # type: ignore[attr-defined]
+            inputs=[context],
+            prediction_length=horizon,
+            quantile_levels=[0.5],
+        )
+        median = quantiles[0, :, 0].to(torch.float32).cpu().numpy()
+        return self._transform.inverse(median)
 
     def _save_model(self, directory: Path) -> None:
-        raise NotImplementedError("TORCH SEAM: port ChronosBolt save (see module docstring)")
+        # BaseChronosPipeline wraps a HF PreTrainedModel at ``.model``.
+        self._model.model.save_pretrained(directory / "model")  # type: ignore[attr-defined]
 
     def _load_model(self, directory: Path) -> None:
-        raise NotImplementedError("TORCH SEAM: port ChronosBolt load (see module docstring)")
+        import torch
+        from chronos import BaseChronosPipeline  # lazy
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        dtype = torch.bfloat16 if device == "cuda" else torch.float32
+        self._model = BaseChronosPipeline.from_pretrained(
+            str(directory / "model"), device_map=device, dtype=dtype
+        )
 
     def _state_meta(self) -> dict:
         return {
@@ -146,12 +182,36 @@ def _build_chronos_bolt(
     scope: str,
     config: ForecastConfig,
 ) -> object:
-    """TORCH SEAM — load (and optionally fine-tune) ChronosBolt.
+    """Load the ChronosBolt pipeline (zero-shot) on GPU when available.
 
-    Port from the IBM reference named in the module docstring; fine-tune when
-    ``cfg['finetune']`` is set.
+    Faithful port of ``chronos_bolt/runner.load_pipeline``: GPU + bfloat16 when
+    CUDA is present, else CPU + float32. The IBM reference evaluates Bolt
+    zero-shot only, so ``cfg['finetune']`` is not supported here — it logs a
+    warning and falls back to the zero-shot pipeline.
+
+    Args:
+        train: Training rows (unused — Bolt is zero-shot).
+        target: Target column name (unused).
+        covariate_cols: Covariate columns (unused — Bolt is univariate).
+        cfg: Resolved ChronosBolt settings.
+        scope: ``"per_device"`` or ``"pooled"`` (unused — one shared checkpoint).
+        config: Pipeline configuration (unused).
+
+    Returns:
+        The loaded ``BaseChronosPipeline``.
     """
-    raise NotImplementedError("TORCH SEAM: build ChronosBolt (see module docstring)")
+    import torch
+    from chronos import BaseChronosPipeline
+
+    if cfg["finetune"]:
+        logger.warning(
+            "chronos_bolt fine-tune is not supported (the IBM reference is "
+            "zero-shot only) — using the zero-shot pipeline."
+        )
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    dtype = torch.bfloat16 if device == "cuda" else torch.float32
+    return BaseChronosPipeline.from_pretrained(MODEL_ID, device_map=device, dtype=dtype)
 
 
 register_backend(ChronosBoltForecaster, available=_AVAILABLE)
