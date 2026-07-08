@@ -140,6 +140,14 @@ def generate_forecast(
         models = band_models[band_name]
         X_band = X_pred.iloc[band_idx]
 
+        model_features = models["main"].feature_name()
+        if list(X_band.columns) != model_features:
+            missing = [f for f in model_features if f not in X_band.columns]
+            for f in missing:
+                X_band = X_band.copy()
+                X_band[f] = np.nan
+            X_band = X_band[model_features]
+
         band_main = np.maximum(0.0, models["main"].predict(X_band))
         preds_main[band_idx] = band_main
 
@@ -148,8 +156,10 @@ def generate_forecast(
             models.get("cqr_Q_active", 0.0),
             models.get("cqr_Q_inactive", 0.0),
         )
-        band_lower = np.maximum(0.0, models["q25"].predict(X_band) - q_vec)
-        band_upper = np.maximum(0.0, models["q75"].predict(X_band) + q_vec)
+        X_q25 = X_band[models["q25"].feature_name()] if models["q25"].feature_name() != model_features else X_band
+        X_q75 = X_band[models["q75"].feature_name()] if models["q75"].feature_name() != model_features else X_band
+        band_lower = np.maximum(0.0, models["q25"].predict(X_q25) - q_vec)
+        band_upper = np.maximum(0.0, models["q75"].predict(X_q75) + q_vec)
         preds_lower[band_idx] = np.minimum(band_lower, band_main)
         preds_upper[band_idx] = np.maximum(band_upper, band_main)
 

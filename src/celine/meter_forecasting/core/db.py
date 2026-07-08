@@ -12,7 +12,6 @@ under the ``datasets`` key. See ``examples/datasets.yaml`` for a sample.
 from __future__ import annotations
 
 import logging
-import os
 import re
 from typing import Any
 
@@ -39,17 +38,15 @@ def _require_sqlalchemy():
 
 
 def build_engine(uri: str | None = None):
-    """Build a SQLAlchemy engine from an explicit URI or environment variables.
+    """Build a SQLAlchemy engine from an explicit URI or settings.
 
-    Resolution order: explicit *uri* > ``DATABASE_URL`` env var.
+    Resolution order: explicit *uri* > ``DATABASE_URL`` env var > dev default.
     """
     sa = _require_sqlalchemy()
-    uri = uri or os.environ.get("DATABASE_URL")
     if not uri:
-        raise ValueError(
-            "No database URI provided. Pass uri=, set DATABASE_URL, "
-            "or configure datasets.uri in your config YAML."
-        )
+        from .settings import settings
+
+        uri = settings.database_url
     return sa.create_engine(uri)
 
 
@@ -138,31 +135,57 @@ def load_meters_from_db(
 
 
 def load_weather_from_db(
-    weather_config: dict[str, Any],
+    weather_config: list[dict[str, Any]] | dict[str, Any],
     *,
     engine: Any,
 ) -> pd.DataFrame:
-    """Load weather features from a database table.
+    """Load and merge weather features from one or more database tables.
+
+    Sources are queried in declaration order. When rows overlap on
+    ``datetime``, the first source wins (same pattern as meters).
 
     Args:
-        weather_config: The ``datasets.weather`` dict from the pipeline YAML.
-            Must contain ``table``. Optionally ``columns`` for renaming.
+        weather_config: The ``datasets.weather`` list (or single dict for
+            backwards compat) from the pipeline YAML. Each entry has
+            ``table`` (required) and optionally ``columns`` for renaming.
         engine: A SQLAlchemy engine.
 
     Returns:
-        A DataFrame satisfying the weather contract.
+        A merged, deduplicated DataFrame satisfying the weather contract.
     """
-    table = weather_config["table"]
+    if isinstance(weather_config, dict):
+        weather_config = [weather_config]
+
     sa = _require_sqlalchemy()
-    _validate_table_name(table)
+    frames: list[pd.DataFrame] = []
 
-    with engine.connect() as conn:
-        df = pd.read_sql(sa.text(f"SELECT * FROM {table}"), conn)  # noqa: S608
+    for source in weather_config:
+        table = source["table"]
+        _validate_table_name(table)
+        with engine.connect() as conn:
+            df = pd.read_sql(sa.text(f"SELECT * FROM {table}"), conn)  # noqa: S608
+        if df.empty:
+            logger.warning("No rows from %s", table)
+            continue
+        column_map = source.get("columns")
+        if column_map:
+            df = df.rename(columns={k: v for k, v in column_map.items() if k in df.columns})
+        logger.info("Read %d weather rows from %s", len(df), table)
+        frames.append(df)
 
-    column_map = weather_config.get("columns")
-    if column_map:
-        df = df.rename(columns={k: v for k, v in column_map.items() if k in df.columns})
+    if not frames:
+        raise SchemaError("All weather sources returned empty results.")
+
+    df = pd.concat(frames, ignore_index=True)
+
+    ts_col = "datetime"
+    if ts_col in df.columns:
+        before = len(df)
+        df = df.sort_values(ts_col).drop_duplicates(subset=[ts_col], keep="first")
+        dupes = before - len(df)
+        if dupes:
+            logger.info("Dropped %d duplicate weather rows after merge", dupes)
 
     validate_raw_schema(df, kind="weather")
-    logger.info("Loaded %d weather rows from %s", len(df), table)
+    logger.info("Loaded %d weather rows from %d source(s)", len(df), len(weather_config))
     return df

@@ -7,15 +7,19 @@ Examples:
     # From a database (configured in YAML):
     meter-forecast run --datasets-config datasets.yaml --output out/
 
-    # With auto-downloaded weather:
-    meter-forecast run --meters my_meters.csv --lat 46.07 --lon 11.12 --output out/
+    # Full retrain (default is incremental):
+    meter-forecast run --full-retrain --output out/
+
+    # Evaluate previous forecasts against actuals:
+    meter-forecast evaluate --datasets-config datasets.yaml
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 import pandas as pd
 import typer
@@ -23,7 +27,7 @@ import typer
 from .core.cleaning import build_processed_hourly
 from .core.config import ForecastConfig, load_config
 from .core.io import load_meters, load_weather
-from .core.schema import COL_TS_HOUR
+from .core.schema import COL_DEVICE_ID, COL_GRID_EXPORT, COL_GRID_IMPORT, COL_TS_HOUR
 from .core.validation import InsufficientDataError, assess_sufficiency, eligibility_to_frame
 from .pipeline import train_pipeline
 
@@ -35,16 +39,16 @@ app = typer.Typer(
     add_completion=False,
 )
 
-Config = Annotated[Optional[Path], typer.Option(help="Path to a YAML config (defaults to packaged config)")]
-DatasetsConfig = Annotated[Optional[Path], typer.Option(help="Datasets-only YAML overlay (merged on top of --config)")]
+Config = Annotated[Path | None, typer.Option(help="Path to a YAML config (defaults to packaged config)")]
+DatasetsConfig = Annotated[Path | None, typer.Option(help="Datasets-only YAML overlay (merged on top of --config)")]
 Verbose = Annotated[bool, typer.Option("--verbose", "-v", help="Enable debug logging")]
-Meters = Annotated[Optional[Path], typer.Option(help="Meter CSV/Parquet (15-min readings)")]
-Weather = Annotated[Optional[Path], typer.Option(help="Optional weather CSV/Parquet (hourly)")]
+Meters = Annotated[Path | None, typer.Option(help="Meter CSV/Parquet (15-min readings)")]
+Weather = Annotated[Path | None, typer.Option(help="Optional weather CSV/Parquet (hourly)")]
 AssumeTz = Annotated[str, typer.Option(help="Timezone for naive meter timestamps")]
-DbUri = Annotated[Optional[str], typer.Option(help="SQLAlchemy DB URI (overrides datasets.uri in config)")]
-DeviceIds = Annotated[Optional[list[str]], typer.Option(help="Only load these device IDs from the database")]
-Lat = Annotated[Optional[float], typer.Option(help="Site latitude — auto-download weather")]
-Lon = Annotated[Optional[float], typer.Option(help="Site longitude — auto-download weather")]
+DbUri = Annotated[str | None, typer.Option(help="SQLAlchemy DB URI (overrides datasets.uri in config)")]
+DeviceIds = Annotated[list[str] | None, typer.Option(help="Only load these device IDs from the database")]
+Lat = Annotated[float | None, typer.Option(help="Site latitude — auto-download weather")]
+Lon = Annotated[float | None, typer.Option(help="Site longitude — auto-download weather")]
 Output = Annotated[Path, typer.Option(help="Output directory")]
 Model = Annotated[str, typer.Option(help="Forecasting backend: lightgbm (default)")]
 Scope = Annotated[str, typer.Option(help="Training scope: per_device (default) or pooled")]
@@ -54,6 +58,13 @@ def _setup_logging(verbose: bool) -> None:
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
+
+
+def _load_config(config: Path | None, datasets_config: Path | None) -> ForecastConfig:
+    return load_config(
+        str(config) if config else None,
+        overlay=str(datasets_config) if datasets_config else None,
     )
 
 
@@ -151,13 +162,12 @@ def run(
     cv: Annotated[bool, typer.Option(help="Also run cross-validation (slower)")] = False,
     model: Model = "lightgbm",
     scope: Scope = "per_device",
+    full_retrain: Annotated[bool, typer.Option(help="Force full retrain from scratch")] = False,
+    jobs: Annotated[int | None, typer.Option("-j", "--jobs", help="Parallel devices")] = None,
 ) -> None:
-    """Easy one-shot: meter data in, forecasts out."""
+    """Daily run: incremental retrain + forecast (full retrain if no prior model)."""
     _setup_logging(verbose)
-    cfg = load_config(
-        str(config) if config else None,
-        overlay=str(datasets_config) if datasets_config else None,
-    )
+    cfg = _load_config(config, datasets_config)
     df_meters = _load_meters_from_opts(
         cfg, meters=meters, assume_tz=assume_tz, db_uri=db_uri, device_ids=device_ids,
     )
@@ -167,7 +177,8 @@ def run(
     try:
         result = train_pipeline(
             df_meters, cfg, df_weather=df_weather,
-            do_cv=cv, do_backtest=False, output_dir=str(output),
+            do_cv=cv, do_backtest=False, full_retrain=full_retrain,
+            n_jobs=jobs, output_dir=str(output),
             model=model, scope=scope,
         )
     except InsufficientDataError as exc:
@@ -193,10 +204,7 @@ def validate(
 ) -> None:
     """Check data against the contract and report per-device data sufficiency."""
     _setup_logging(verbose)
-    cfg = load_config(
-        str(config) if config else None,
-        overlay=str(datasets_config) if datasets_config else None,
-    )
+    cfg = _load_config(config, datasets_config)
     df_meters = _load_meters_from_opts(
         cfg, meters=meters, assume_tz=assume_tz, db_uri=db_uri, device_ids=device_ids,
     )
@@ -232,13 +240,12 @@ def train(
     no_cv: Annotated[bool, typer.Option(help="Skip cross-validation")] = False,
     model: Model = "lightgbm",
     scope: Scope = "per_device",
+    full_retrain: Annotated[bool, typer.Option(help="Force full retrain from scratch")] = False,
+    jobs: Annotated[int | None, typer.Option("-j", "--jobs", help="Parallel devices")] = None,
 ) -> None:
     """Train models and write forecasts."""
     _setup_logging(verbose)
-    cfg = load_config(
-        str(config) if config else None,
-        overlay=str(datasets_config) if datasets_config else None,
-    )
+    cfg = _load_config(config, datasets_config)
     df_meters = _load_meters_from_opts(
         cfg, meters=meters, assume_tz=assume_tz, db_uri=db_uri, device_ids=device_ids,
     )
@@ -248,7 +255,8 @@ def train(
     try:
         result = train_pipeline(
             df_meters, cfg, df_weather=df_weather,
-            do_cv=not no_cv, do_backtest=backtest, output_dir=str(output),
+            do_cv=not no_cv, do_backtest=backtest, full_retrain=full_retrain,
+            n_jobs=jobs, output_dir=str(output),
             model=model, scope=scope,
         )
     except InsufficientDataError as exc:
@@ -259,6 +267,157 @@ def train(
     if not result.cv_results.empty:
         typer.echo("\nCross-validation skill:")
         typer.echo(result.cv_results.round(3).to_string(index=False))
+
+
+@app.command()
+def evaluate(
+    config: Config = None,
+    datasets_config: DatasetsConfig = None,
+    verbose: Verbose = False,
+    meters: Meters = None,
+    assume_tz: AssumeTz = "UTC",
+    db_uri: DbUri = None,
+    device_ids: DeviceIds = None,
+    forecasts_dir: Annotated[Path, typer.Option(help="Directory containing forecasts.json")] = Path("meter_forecast_out"),
+) -> None:
+    """Evaluate previous forecasts against actual meter data."""
+    _setup_logging(verbose)
+    cfg = _load_config(config, datasets_config)
+
+    forecasts_path = forecasts_dir / "forecasts.json"
+    if not forecasts_path.exists():
+        typer.echo(f"Error: {forecasts_path} not found. Run 'meter-forecast run' first.", err=True)
+        raise typer.Exit(1)
+
+    with open(forecasts_path, encoding="utf-8") as f:
+        forecasts = json.load(f)
+
+    df_meters = _load_meters_from_opts(
+        cfg, meters=meters, assume_tz=assume_tz, db_uri=db_uri, device_ids=device_ids,
+    )
+
+    from .core.cleaning import aggregate_to_hourly
+    from .core.evaluation import calc_mae, calc_rmse
+
+    hourly = aggregate_to_hourly(df_meters, cfg)
+    tracker = None
+    try:
+        from .core.tracking import get_tracker
+
+        tracker = get_tracker(cfg)
+    except Exception:
+        pass
+
+    results = []
+    for device_id, record in forecasts.items():
+        fc_list = record.get("forecasts", [])
+        if not fc_list:
+            continue
+
+        fc_df = pd.DataFrame(fc_list)
+        fc_df["ts_hour"] = pd.to_datetime(fc_df["timestamp"])
+        if fc_df["ts_hour"].dt.tz is None:
+            fc_df["ts_hour"] = fc_df["ts_hour"].dt.tz_localize("UTC")
+
+        dev_actual = hourly[hourly[COL_DEVICE_ID] == device_id].copy()
+        if dev_actual.empty:
+            logger.warning("No actuals for device %s — skipping", device_id)
+            continue
+
+        merged = fc_df.merge(dev_actual, on=COL_TS_HOUR, how="inner")
+        if merged.empty:
+            logger.warning("No overlapping timestamps for %s — actuals may not have arrived yet", device_id)
+            continue
+
+        device_metrics: dict[str, float] = {}
+        n_matched = len(merged)
+
+        for target, fc_col in [
+            (COL_GRID_EXPORT, "grid_export_kwh"),
+            (COL_GRID_IMPORT, "grid_import_kwh"),
+        ]:
+            if fc_col not in merged.columns or target not in merged.columns:
+                continue
+            actual = merged[target].values
+            predicted = merged[fc_col].values
+            mask = ~(pd.isna(actual) | pd.isna(predicted))
+            if mask.sum() < 1:
+                continue
+            mae = calc_mae(actual[mask], predicted[mask])
+            rmse = calc_rmse(actual[mask], predicted[mask])
+            device_metrics[f"eval_mae_{target}"] = mae
+            device_metrics[f"eval_rmse_{target}"] = rmse
+
+            lower_col = fc_col.replace("_kwh", "_lower")
+            upper_col = fc_col.replace("_kwh", "_upper")
+            if lower_col in merged.columns and upper_col in merged.columns:
+                in_interval = (
+                    (actual[mask] >= merged[lower_col].values[mask])
+                    & (actual[mask] <= merged[upper_col].values[mask])
+                )
+                device_metrics[f"eval_coverage_{target}"] = float(in_interval.mean())
+
+        if device_metrics:
+            device_metrics["eval_n_hours"] = float(n_matched)
+            results.append({"device_id": device_id, **device_metrics})
+
+            if tracker and tracker.enabled:
+                with tracker.run(run_name=f"eval-{device_id}"):
+                    tracker.set_tags({"device_id": device_id, "mode": "evaluate"})
+                    tracker.log_metrics(device_metrics)
+
+    if not results:
+        typer.echo("No devices had matching actuals for evaluation.")
+        raise typer.Exit(1)
+
+    report = pd.DataFrame(results)
+    typer.echo(report.round(4).to_string(index=False))
+    typer.echo(f"\nEvaluated {len(results)} device(s) over {int(report['eval_n_hours'].mean())} avg hours.")
+
+    eval_path = forecasts_dir / "evaluation.csv"
+    report.to_csv(eval_path, index=False)
+    typer.echo(f"Saved to {eval_path}")
+
+
+@app.command()
+def cleanup(
+    config: Config = None,
+    datasets_config: DatasetsConfig = None,
+    verbose: Verbose = False,
+    retention_days: Annotated[int, typer.Option(help="Delete runs older than N days")] = 7,
+    device_id: Annotated[str | None, typer.Option(help="Only clean this device")] = None,
+    dry_run: Annotated[bool, typer.Option(help="Show what would be deleted without deleting")] = False,
+) -> None:
+    """Clean up old MLflow runs and model artifacts."""
+    _setup_logging(verbose)
+    cfg = _load_config(config, datasets_config)
+
+    from .core.tracking import get_tracker
+
+    tracker = get_tracker(cfg)
+    if not tracker.enabled:
+        typer.echo("Tracking not enabled — nothing to clean up.")
+        raise typer.Exit(0)
+
+    if dry_run:
+        import time
+
+        runs = tracker.list_runs(device_id=device_id)
+        cutoff_ms = int((time.time() - retention_days * 86400) * 1000)
+        old = [r for r in runs if r["start_time"] < cutoff_ms]
+        typer.echo(f"Would delete {len(old)}/{len(runs)} runs (older than {retention_days} days):")
+        for r in old[:20]:
+            typer.echo(f"  {r['name']} ({r['mode']}) session={r['session']}")
+        if len(old) > 20:
+            typer.echo(f"  ... and {len(old) - 20} more")
+        return
+
+    if device_id:
+        deleted = tracker.cleanup_old_runs(device_id, retention_days)
+    else:
+        deleted = tracker.cleanup_all(retention_days)
+
+    typer.echo(f"Deleted {deleted} run(s) older than {retention_days} days.")
 
 
 def main() -> None:

@@ -21,20 +21,37 @@ tasks:
       - uv run meter-forecast validate --datasets-config {{.CONFIG}} {{.CLI_ARGS}}
 
   run:
-    desc: Train and forecast from the database
+    desc: Daily run — incremental retrain + forecast
     deps: [install, mlflow]
-    env:
-      MLFLOW_TRACKING_URI: http://localhost:5000
     cmds:
       - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}} {{.CLI_ARGS}}
 
-  train:
-    desc: Full training with backtest from the database
+  run:full:
+    desc: Full retrain from scratch
     deps: [install, mlflow]
-    env:
-      MLFLOW_TRACKING_URI: http://localhost:5000
+    cmds:
+      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}} --full-retrain {{.CLI_ARGS}}
+
+  evaluate:
+    desc: Evaluate previous forecasts against actuals
+    cmds:
+      - uv run meter-forecast evaluate --datasets-config {{.CONFIG}} --forecasts-dir {{.OUTPUT}} {{.CLI_ARGS}}
+
+  train:
+    desc: Full training with backtest
+    deps: [install, mlflow]
     cmds:
       - uv run meter-forecast train --datasets-config {{.CONFIG}} --output {{.OUTPUT}} --backtest {{.CLI_ARGS}}
+
+  cleanup:
+    desc: Clean up old MLflow runs (default 7 days)
+    cmds:
+      - uv run meter-forecast cleanup --datasets-config {{.CONFIG}} {{.CLI_ARGS}}
+
+  cleanup:dry:
+    desc: Preview what cleanup would delete
+    cmds:
+      - uv run meter-forecast cleanup --datasets-config {{.CONFIG}} --dry-run {{.CLI_ARGS}}
 
   mlflow:
     desc: Start MLflow + MinIO
@@ -45,12 +62,6 @@ tasks:
     desc: Stop MLflow + MinIO
     cmds:
       - docker compose down
-
-  mlflow:ui:
-    desc: Open MLflow UI in browser
-    deps: [mlflow]
-    cmds:
-      - echo "MLflow UI at http://localhost:5000"
 
   lint:
     desc: Run ruff linter

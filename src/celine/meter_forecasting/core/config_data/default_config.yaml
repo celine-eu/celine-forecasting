@@ -265,6 +265,16 @@ tracking:
   registered_model_name: meter-forecast-lgb
 
 # ---------------------------------------------------------------------------
+# Incremental training
+# ---------------------------------------------------------------------------
+incremental:
+  enabled: true
+  num_boost_round: 100         # fewer rounds for warm-start updates
+  lookback_days: 1             # train on last N days of data only
+  drift_threshold: 0.15        # MAE increase ratio that triggers 'degraded' tag
+  retention_days: 7            # delete MLflow runs older than this many days
+
+# ---------------------------------------------------------------------------
 # Database datasets (optional — set null to use file-based loading only)
 # ---------------------------------------------------------------------------
 # Provide a datasets section to load meter/weather data from PostgreSQL tables.

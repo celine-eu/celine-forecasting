@@ -167,8 +167,8 @@ class TestBuildEngine:
             engine = build_engine()
             assert engine is not None
 
-    def test_no_uri_raises(self):
+    def test_falls_back_to_settings(self):
         from celine.meter_forecasting.core.db import build_engine
 
-        with patch.dict("os.environ", {}, clear=True), pytest.raises(ValueError, match="No database URI"):
-            build_engine()
+        engine = build_engine()
+        assert engine is not None

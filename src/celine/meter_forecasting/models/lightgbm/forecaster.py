@@ -72,6 +72,7 @@ class LightGBMForecaster:
         has_pv: bool = True,
         available_columns: set[str] | None = None,
         calibrate: bool = True,
+        previous_models: dict | None = None,
     ) -> LightGBMFitted | None:
         """Train one (device, target) horizon-band bundle.
 
@@ -84,6 +85,8 @@ class LightGBMForecaster:
             has_pv: Whether the device has PV.
             available_columns: Weather columns present in the data.
             calibrate: If False, CQR corrections are skipped (used during CV).
+            previous_models: Prior band-model bundle to warm-start from
+                (incremental training).
 
         Returns:
             A fitted bundle, or ``None`` when any band lacks sufficient data.
@@ -96,6 +99,7 @@ class LightGBMForecaster:
         band_models = train_band_models(
             frame, target, train_end, config,
             has_pv=has_pv, available_columns=available_columns, calibrate=calibrate,
+            previous_models=previous_models,
         )
         if band_models is None:
             return None
