@@ -13,8 +13,6 @@ import numpy as np
 import pandas as pd
 
 from .config import ForecastConfig
-from .forecast import generate_forecast
-from .model import compute_eligibility, train_band_models
 from .schema import COL_DEVICE_ID, COL_GRID_IMPORT, COL_TS_HOUR
 
 logger = logging.getLogger(__name__)
@@ -99,6 +97,10 @@ def run_backtest(
         Tidy frame of per-(device, target, origin, horizon) actual/prediction
         rows, suitable for :func:`compute_metrics` aggregation.
     """
+    # Lazy imports to avoid circular dependencies (forecast/model are in meter/)
+    from celine.forecasting.meter.forecast import generate_forecast
+    from celine.forecasting.meter.model import compute_eligibility, train_band_models
+
     horizon = config.forecast_horizon
     n_origins = int(config.backtest.get("origins", 21))
     warmup = pd.Timedelta(days=int(config.backtest.get("warmup_days", 14)))

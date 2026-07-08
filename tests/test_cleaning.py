@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-from celine.meter_forecasting.cleaning import (
+from celine.forecasting.meter.cleaning import (
     add_derived_metrics,
     aggregate_to_hourly,
     build_processed_hourly,

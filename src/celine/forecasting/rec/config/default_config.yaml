@@ -1,0 +1,158 @@
+# =============================================================================
+# rec-forecast -- default configuration
+# =============================================================================
+# REC-aggregate energy forecasting: LightGBM quantile models with conformal
+# calibration. The REC target is derived from individual meter data:
+#   p_exchanged_kwh = sum(production) - sum(consumption)
+# across all devices in the renewable energy community.
+#
+# Units: all energy values are in kWh.
+# =============================================================================
+
+random_seed: 42
+local_tz: Europe/Rome
+
+# The core config requires 'targets' as a list.
+targets:
+  - p_exchanged_kwh
+
+pipeline_type: rec
+target: p_exchanged_kwh
+
+# ---------------------------------------------------------------------------
+# Features
+# ---------------------------------------------------------------------------
+features:
+  selected:
+    - hour_sin
+    - hour_cos
+    - dow_sin
+    - dow_cos
+    - annual_sin
+    - annual_cos
+    - semi_annual_sin
+    - semi_annual_cos
+    - is_weekend
+    - is_holiday
+    - is_daylight
+    - temperature_2m
+    - shortwave_radiation
+    - cloud_cover
+    - precipitation
+    - heating_degree_hour
+    - temp_rolling_mean_24h
+    - temp_rolling_std_24h
+    - radiation_rolling_mean_24h
+    - cloud_cover_rolling_mean_24h
+    - heating_degree_rolling_mean_24h
+    - cumulative_hdd_48h
+    - temp_change_rate_3h
+    - thermal_inertia_12h
+    - temp_gradient_24h
+    - temp_x_hour_sin
+    - radiation_x_daytime
+    - weekend_x_hour_cos
+    - heating_x_night
+
+  fourier_periods:
+    annual: 8760
+    semi_annual: 4380
+    daily: 24
+    weekly: 168
+
+  weather_core:
+    - temperature_2m
+    - shortwave_radiation
+    - cloud_cover
+    - precipitation
+
+  rolling_windows:
+    - 24
+
+# ---------------------------------------------------------------------------
+# Holidays
+# ---------------------------------------------------------------------------
+holidays:
+  country: IT
+
+# ---------------------------------------------------------------------------
+# Anomaly date ranges to exclude from training
+# ---------------------------------------------------------------------------
+anomaly_dates: []
+
+# ---------------------------------------------------------------------------
+# Model
+# ---------------------------------------------------------------------------
+quantiles:
+  - 0.05
+  - 0.10
+  - 0.25
+  - 0.50
+  - 0.75
+  - 0.90
+  - 0.95
+
+lgb_params:
+  n_estimators: 500
+  max_depth: 6
+  learning_rate: 0.05
+  subsample: 0.8
+  colsample_bytree: 0.8
+  min_child_samples: 20
+  reg_alpha: 0.1
+  reg_lambda: 1.0
+  verbose: -1
+  n_jobs: -1
+
+# ---------------------------------------------------------------------------
+# Conformal calibration
+# ---------------------------------------------------------------------------
+conformal:
+  target_intervals:
+    - lower: q10
+      upper: q90
+      coverage: 0.80
+    - lower: q05
+      upper: q95
+      coverage: 0.90
+
+# ---------------------------------------------------------------------------
+# Cross-validation
+# ---------------------------------------------------------------------------
+cv:
+  n_splits: 3
+  test_size_hours: 168
+  min_train_size_hours: 720
+
+# ---------------------------------------------------------------------------
+# Forecast
+# ---------------------------------------------------------------------------
+forecast:
+  actual_days: 5
+  forecast_days: 2
+  interval:
+    - 0.25
+    - 0.75
+
+# ---------------------------------------------------------------------------
+# Sufficiency
+# ---------------------------------------------------------------------------
+sufficiency:
+  min_span_days: 90
+  min_coverage: 0.70
+
+# ---------------------------------------------------------------------------
+# MLflow experiment tracking
+# ---------------------------------------------------------------------------
+tracking:
+  enabled: true
+  tracking_uri: null
+  default_local_uri: "sqlite:///mlflow.db"
+  experiment_name: rec-forecast
+  register_model: false
+  registered_model_name: rec-forecast-lgb
+
+# ---------------------------------------------------------------------------
+# Database datasets (null = file-based)
+# ---------------------------------------------------------------------------
+datasets: null

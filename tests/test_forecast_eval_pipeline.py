@@ -7,14 +7,14 @@ import json
 import numpy as np
 import pandas as pd
 
-from celine.meter_forecasting.cleaning import build_processed_hourly, prepare_weather
-from celine.meter_forecasting.config import load_config
-from celine.meter_forecasting.evaluation import calc_mae, calc_rmse, compute_metrics
-from celine.meter_forecasting.forecast import generate_forecast, seasonal_naive_forecast
-from celine.meter_forecasting.model import train_band_models
-from celine.meter_forecasting.pipeline import train_pipeline
-from celine.meter_forecasting.schema import COL_DEVICE_ID, COL_TS_HOUR
-from celine.meter_forecasting.tracking import BaseTracker, get_tracker
+from celine.forecasting.core.evaluation import calc_mae, calc_rmse, compute_metrics
+from celine.forecasting.core.schema import COL_DEVICE_ID, COL_TS_HOUR
+from celine.forecasting.core.tracking import BaseTracker, get_tracker
+from celine.forecasting.meter import load_config
+from celine.forecasting.meter.cleaning import build_processed_hourly, prepare_weather
+from celine.forecasting.meter.forecast import generate_forecast, seasonal_naive_forecast
+from celine.forecasting.meter.model import train_band_models
+from celine.forecasting.meter.pipeline import train_pipeline
 
 
 def test_metrics_match_hand_computation():

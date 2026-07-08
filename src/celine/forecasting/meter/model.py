@@ -15,9 +15,15 @@ import lightgbm as lgb
 import numpy as np
 import pandas as pd
 
-from .config import ForecastConfig
+from celine.forecasting.core.config import ForecastConfig
+from celine.forecasting.core.schema import (
+    COL_DEVICE_ID,
+    COL_GRID_EXPORT,
+    COL_GRID_IMPORT,
+    COL_TS_HOUR,
+)
+
 from .features import build_monotonic_constraints, get_features_for_target, prepare_training_data
-from .schema import COL_DEVICE_ID, COL_GRID_EXPORT, COL_GRID_IMPORT, COL_TS_HOUR
 
 logger = logging.getLogger(__name__)
 
@@ -86,8 +92,9 @@ def train_lgb_model(
     if init_model is not None:
         if init_model.num_feature() != X.shape[1]:
             logger.warning(
-                "Feature count changed (%d → %d) — discarding init_model",
-                init_model.num_feature(), X.shape[1],
+                "Feature count changed (%d -> %d) — discarding init_model",
+                init_model.num_feature(),
+                X.shape[1],
             )
             init_model = None
     if init_model is not None:
@@ -99,8 +106,10 @@ def train_lgb_model(
     if len(X) < min_rows:
         r = rounds or int(config.raw.get("num_boost_round_small", 200))
         return lgb.train(
-            train_params, lgb.Dataset(X, label=y),
-            num_boost_round=r, init_model=init_model,
+            train_params,
+            lgb.Dataset(X, label=y),
+            num_boost_round=r,
+            init_model=init_model,
         )
 
     split_frac = float(config.raw.get("validation_split_fraction", 0.85))
@@ -217,7 +226,9 @@ def train_band_models(
         X_feat = X_band.drop(columns=[COL_TS_HOUR])
         prev = (previous_models or {}).get(band_name)
         prev_main = prev["main"] if prev else None
-        model_main = train_lgb_model(X_feat, y_band, main_params, config, mono, init_model=prev_main)
+        model_main = train_lgb_model(
+            X_feat, y_band, main_params, config, mono, init_model=prev_main
+        )
 
         if not calibrate:
             band_models[band_name] = {

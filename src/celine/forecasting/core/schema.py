@@ -1,7 +1,7 @@
-"""Input data contract for the meter-forecast pipeline.
+"""Input data contract for the forecasting pipelines.
 
 This module is the single machine-readable source of truth for the shape of the
-data the pipeline expects. Because the CELINE demonstrator data is private and
+data the pipelines expect. Because the CELINE demonstrator data is private and
 cannot be shared, this contract is how an external user knows *exactly* how to
 shape their own meter and weather data so the pipeline runs unchanged.
 
@@ -17,6 +17,19 @@ aggregation therefore *sums* the four quarters of an hour to obtain kWh/hour.
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+# ---------------------------------------------------------------------------
+# Error types for contract violations
+# ---------------------------------------------------------------------------
+
+
+class SchemaError(ValueError):
+    """Raised when input data does not satisfy the data contract."""
+
+
+class InsufficientDataError(ValueError):
+    """Raised when *no* device clears the sufficiency thresholds."""
+
 
 # ---------------------------------------------------------------------------
 # Raw 15-minute meter readings

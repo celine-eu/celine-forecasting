@@ -1,4 +1,4 @@
-"""End-to-end orchestration: clean → validate → train → forecast → track.
+"""End-to-end orchestration: clean -> validate -> train -> forecast -> track.
 
 This module wires the individual stages together and is what the CLI and the
 quickstart example drive. Every stage is also usable on its own.
@@ -16,20 +16,30 @@ import joblib
 import numpy as np
 import pandas as pd
 
+from celine.forecasting.core.config import ForecastConfig
+from celine.forecasting.core.config import load_config as _core_load_config
+from celine.forecasting.core.evaluation import calc_mae, run_backtest, summarize_backtest
+from celine.forecasting.core.schema import (
+    COL_DEVICE_ID,
+    COL_GRID_EXPORT,
+    COL_GRID_IMPORT,
+    COL_TS_HOUR,
+)
+from celine.forecasting.core.tracking import get_tracker
+
 from .cleaning import build_processed_hourly, prepare_weather
-from .config import ForecastConfig, load_config
-from .evaluation import calc_mae, run_backtest, summarize_backtest
 from .forecast import (
     forecast_records_from_bundle,
     generate_forecast,
     seasonal_naive_forecast,
 )
 from .model import compute_eligibility, train_band_models
-from .schema import COL_DEVICE_ID, COL_GRID_EXPORT, COL_GRID_IMPORT, COL_TS_HOUR
-from .tracking import get_tracker
 from .validation import assess_sufficiency, eligibility_to_frame
 
 logger = logging.getLogger(__name__)
+
+#: Path to the meter pipeline's default configuration.
+_METER_DEFAULT_CONFIG = Path(__file__).resolve().parent / "config" / "default_config.yaml"
 
 
 @dataclass
@@ -58,7 +68,7 @@ class PipelineResult:
 
 def _load_governance(config: ForecastConfig) -> dict[str, str]:
     """Load governance metadata as flat tags for MLflow."""
-    from .settings import settings
+    from celine.forecasting.core.settings import settings
 
     tables = []
     datasets = config.datasets
@@ -105,9 +115,11 @@ def _quick_train_mae(
             has_pv=True,
             available_columns=available_columns,
         )
-        merged = fc.set_index("ts_hour").join(
-            actual.set_index(COL_TS_HOUR), rsuffix="_a"
-        ).dropna(subset=[target, "prediction"])
+        merged = (
+            fc.set_index("ts_hour")
+            .join(actual.set_index(COL_TS_HOUR), rsuffix="_a")
+            .dropna(subset=[target, "prediction"])
+        )
         if len(merged) < 12:
             return None
         return float(calc_mae(merged[target].values, merged["prediction"].values))
@@ -217,7 +229,8 @@ def train_pipeline(
     Raises:
         InsufficientDataError: If no device clears the sufficiency thresholds.
     """
-    config = config or load_config()
+    if config is None:
+        config = _core_load_config(default_path=_METER_DEFAULT_CONFIG)
     incr_cfg = config.incremental
     incremental = (not full_retrain) and incr_cfg.get("enabled", True)
     np.random.seed(config.random_seed)
@@ -252,7 +265,7 @@ def train_pipeline(
     session_id = str(df_train[COL_TS_HOUR].max())
     governance = _load_governance(config)
 
-    from .settings import settings
+    from celine.forecasting.core.settings import settings
 
     effective_n_jobs = n_jobs if n_jobs is not None else settings.training_n_jobs
     device_results = joblib.Parallel(n_jobs=effective_n_jobs, prefer="threads")(
@@ -351,13 +364,15 @@ def _train_device(
 
     with tracker.run(run_name=f"{device}"):
         mode = "incremental" if device_incremental else "full"
-        tracker.set_tags({
-            "device_id": device,
-            "has_pv": str(has_pv),
-            "mode": mode,
-            "session": session_id,
-            **governance,
-        })
+        tracker.set_tags(
+            {
+                "device_id": device,
+                "has_pv": str(has_pv),
+                "mode": mode,
+                "session": session_id,
+                **governance,
+            }
+        )
         tracker.log_params(_run_params(config, [device]))
         tracker.log_metrics({"n_train_rows": float(len(dev))})
 
@@ -421,7 +436,9 @@ def _train_device(
                             tracker.set_tags({"degraded": "true"})
                             logger.warning(
                                 "Device %s degraded: %s increased %.1f%%",
-                                device, key, drift * 100,
+                                device,
+                                key,
+                                drift * 100,
                             )
 
         if trained:

@@ -1,8 +1,11 @@
-"""Configuration loading for the meter-forecast pipeline.
+"""Configuration loading for the forecasting pipelines.
 
-The YAML config (``config/default_config.yaml``) is the single place every
-tunable lives. It is loaded into a lightweight, typed :class:`ForecastConfig`
-dataclass so the rest of the package never reaches into raw dictionaries.
+The YAML config is the single place every tunable lives. It is loaded into a
+lightweight, typed :class:`ForecastConfig` dataclass so the rest of the package
+never reaches into raw dictionaries.
+
+Each pipeline (meter, rec, ...) supplies its own default config path via the
+``default_path`` parameter to :func:`load_config`.
 """
 
 from __future__ import annotations
@@ -13,7 +16,8 @@ from typing import Any
 
 import yaml
 
-DEFAULT_CONFIG_PATH = Path(__file__).resolve().parent / "config" / "default_config.yaml"
+# Each pipeline provides its own default config; there is no package-global default.
+DEFAULT_CONFIG_PATH = None
 
 
 @dataclass
@@ -85,25 +89,40 @@ def _deep_merge(base: dict, overlay: dict) -> dict:
 
 
 def load_config(
-    path: str | Path | None = None, overlay: str | Path | None = None
+    path: str | Path | None = None,
+    overlay: str | Path | None = None,
+    *,
+    default_path: str | Path | None = None,
 ) -> ForecastConfig:
     """Load and validate the pipeline configuration.
 
     Args:
-        path: Path to a YAML config file. Defaults to the packaged
-            ``config/default_config.yaml``.
+        path: Path to a YAML config file. Falls back to *default_path* when
+            ``None``.
         overlay: Optional path to a second YAML config that is deep-merged
             on top of the base. For ``datasets.meters`` lists, the overlay's
             entries are *appended* (extend, not replace).
+        default_path: Pipeline-specific default config path, used when *path*
+            is ``None``.
 
     Returns:
         A populated :class:`ForecastConfig`.
 
     Raises:
         FileNotFoundError: If ``path`` does not exist.
-        ValueError: If the YAML is empty or missing required top-level keys.
+        ValueError: If the YAML is empty, missing required top-level keys,
+            or no config path is available.
     """
-    config_path = Path(path) if path is not None else DEFAULT_CONFIG_PATH
+    if path is not None:
+        config_path = Path(path)
+    elif default_path is not None:
+        config_path = Path(default_path)
+    else:
+        raise ValueError(
+            "No config path provided and no default_path set. "
+            "Pass an explicit path or use a pipeline-specific load_config wrapper."
+        )
+
     if not config_path.exists():
         raise FileNotFoundError(f"Config file not found: {config_path}")
 

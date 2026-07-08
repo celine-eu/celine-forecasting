@@ -16,22 +16,26 @@ from dataclasses import dataclass
 
 import pandas as pd
 
-from .config import ForecastConfig
-from .schema import (
+from celine.forecasting.core.config import ForecastConfig
+from celine.forecasting.core.schema import (
     COL_DEVICE_ID,
     METER_CONTRACT,
     WEATHER_CONTRACT,
+    InsufficientDataError,
+    SchemaError,
 )
 
 logger = logging.getLogger(__name__)
 
-
-class SchemaError(ValueError):
-    """Raised when input data does not satisfy the data contract."""
-
-
-class InsufficientDataError(ValueError):
-    """Raised when *no* device clears the sufficiency thresholds."""
+# Re-export for backwards compatibility
+__all__ = [
+    "SchemaError",
+    "InsufficientDataError",
+    "DeviceEligibility",
+    "validate_raw_schema",
+    "assess_sufficiency",
+    "eligibility_to_frame",
+]
 
 
 @dataclass

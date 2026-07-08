@@ -1,6 +1,6 @@
 # MLflow tracking
 
-How the pipeline uses MLflow: what gets logged, how to read it, and how to
+How the pipelines use MLflow: what gets logged, how to read it, and how to
 load models for inference.
 
 ---
@@ -11,8 +11,11 @@ load models for inference.
 # Start MLflow + MinIO
 docker compose up -d
 
-# Run training (incremental by default, full retrain if no prior model)
-task run
+# Run meter training (incremental by default)
+meter-forecast run --datasets-config datasets.yaml --output out/
+
+# Run REC training
+rec-forecast run --meters rec_meters.csv --weather weather.csv --output out/
 
 # MLflow UI
 open http://172.17.0.1:5000
@@ -22,8 +25,10 @@ open http://172.17.0.1:5000
 
 ## 2. Architecture
 
+### Meter pipeline (experiment: `meter-forecast`)
+
 Each training run creates **one MLflow run per device**, tagged with `device_id`.
-Models are stored as native LightGBM `.lgb` files (not pyfunc).
+Models are stored as native LightGBM `.lgb` files.
 
 ```
 Experiment: meter-forecast
@@ -39,6 +44,22 @@ Experiment: meter-forecast
 │  └─ ...
 └─ Run: eval-dev-A (mode=evaluate, device_id=dev-A)
    └─ metrics: eval_mae_*, eval_rmse_*, eval_coverage_*
+```
+
+### REC pipeline (experiment: `rec-forecast`)
+
+Each training run creates a **single MLflow run** for the whole REC.
+Quantile models and the conformal calibrator are stored as artifacts.
+
+```
+Experiment: rec-forecast
+└─ Run: rec-training-2025-01-15
+   ├─ params: config values, n_features, quantiles
+   ├─ metrics: cv_mae, cv_rmse, cv_r2, n_train_rows
+   └─ artifacts/
+      ├─ quantile_models.joblib     (7 LightGBM models)
+      ├─ calibrator.joblib          (ConformalCalibrator)
+      └─ feature_config.json        (29 feature names + quantiles)
 ```
 
 ---
@@ -115,19 +136,20 @@ AWS_ACCESS_KEY_ID=minioadmin
 AWS_SECRET_ACCESS_KEY=minioadmin
 ```
 
-Pipeline tracking config in `config/default_config.yaml`:
+Pipeline tracking config in each pipeline's `config/default_config.yaml`:
 
 ```yaml
+# meter/config/default_config.yaml
 tracking:
   enabled: true
   experiment_name: meter-forecast
+  registered_model_name: meter-forecast-lgb
 
-incremental:
+# rec/config/default_config.yaml
+tracking:
   enabled: true
-  num_boost_round: 100
-  lookback_days: 1
-  drift_threshold: 0.15
-  retention_days: 7
+  experiment_name: rec-forecast
+  registered_model_name: rec-forecast-lgb
 ```
 
 ---
@@ -137,13 +159,13 @@ incremental:
 Models are stored as native LightGBM files. Load them via the tracker:
 
 ```python
-from celine.meter_forecasting.config import load_config
-from celine.meter_forecasting.tracking import get_tracker
+# Meter pipeline — load per-device models
+from celine.forecasting.meter import load_config
+from celine.forecasting.core.tracking import get_tracker
 
 config = load_config()
 tracker = get_tracker(config)
 
-# Load the latest model bundle for a device
 models = tracker.load_previous_models("dev-A")
 # → {"grid_export/short": {"main": Booster, "q25": Booster, ...}, ...}
 ```

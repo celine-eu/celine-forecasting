@@ -3,7 +3,7 @@
 Pure-DataFrame translation of ``M1_meters/01_data_loading.ipynb`` with all
 private data sources (PostgreSQL, MinIO/S3, hardcoded credentials) removed.
 The caller supplies already-loaded DataFrames that satisfy the data contract
-(see :mod:`celine.meter_forecasting.schema`); this module turns raw 15-minute readings
+(see :mod:`celine.forecasting.core.schema`); this module turns raw 15-minute readings
 into the processed hourly frame the models consume.
 
 Pipeline:
@@ -22,8 +22,8 @@ import logging
 import numpy as np
 import pandas as pd
 
-from .config import ForecastConfig
-from .schema import (
+from celine.forecasting.core.config import ForecastConfig
+from celine.forecasting.core.schema import (
     COL_CONSUMPTION,
     COL_DEVICE_ID,
     COL_GRID_EXPORT,

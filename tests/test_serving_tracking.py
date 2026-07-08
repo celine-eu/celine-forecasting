@@ -10,18 +10,18 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from celine.meter_forecasting.cleaning import build_processed_hourly
-from celine.meter_forecasting.config import load_config
-from celine.meter_forecasting.model import compute_eligibility, train_band_models
-from celine.meter_forecasting.schema import (
+from celine.forecasting.core.schema import (
     COL_DEVICE_ID,
     COL_GRID_IMPORT,
     COL_TS_HOUR,
 )
+from celine.forecasting.meter import load_config
+from celine.forecasting.meter.cleaning import build_processed_hourly
+from celine.forecasting.meter.model import compute_eligibility, train_band_models
 
 
 def test_split_input_bare_dataframe_is_weather_free():
-    from celine.meter_forecasting.serving import _split_input
+    from celine.forecasting.meter.serving import _split_input
 
     df = pd.DataFrame(
         {"device_id": ["d"], "ts": [1], "consumption_kw": [0.1], "production_kw": [0.0]}
@@ -33,7 +33,7 @@ def test_split_input_bare_dataframe_is_weather_free():
 
 
 def test_split_input_dict_with_weather():
-    from celine.meter_forecasting.serving import _split_input
+    from celine.forecasting.meter.serving import _split_input
 
     m = pd.DataFrame({"device_id": ["d"]})
     w = pd.DataFrame({"datetime": [1]})
@@ -44,7 +44,7 @@ def test_split_input_dict_with_weather():
 
 
 def test_split_input_dict_without_weather_is_weather_free():
-    from celine.meter_forecasting.serving import _split_input
+    from celine.forecasting.meter.serving import _split_input
 
     m = pd.DataFrame({"device_id": ["d"]})
     meters, weather = _split_input({"meters": m})
@@ -54,7 +54,7 @@ def test_split_input_dict_without_weather_is_weather_free():
 
 
 def test_split_input_dict_missing_meters_raises():
-    from celine.meter_forecasting.serving import _split_input
+    from celine.forecasting.meter.serving import _split_input
 
     with pytest.raises(ValueError, match="meters"):
         _split_input({"weather": pd.DataFrame()})
@@ -109,7 +109,7 @@ def _train_weather_bundle(raw_meters, raw_weather, config):
 def test_weather_model_predicts_with_supplied_weather(raw_meters, raw_weather, tmp_path):
     """A weather-trained model reloads and predicts from a meters+weather dict."""
     mlflow = pytest.importorskip("mlflow")
-    from celine.meter_forecasting.tracking import get_tracker
+    from celine.forecasting.core.tracking import get_tracker
 
     config = load_config()
     config.tracking = {
@@ -130,14 +130,14 @@ def test_weather_model_predicts_with_supplied_weather(raw_meters, raw_weather, t
     assert len(preds) == config.forecast_horizon
     assert (preds["device_id"] == "dev-B").all()
     assert not preds[["grid_import_kwh", "grid_export_kwh", "net_exchange_kwh"]].isna().any().any()
-    # dev-B is consumption-only → import forecasts must be non-trivially non-zero,
+    # dev-B is consumption-only -> import forecasts must be non-trivially non-zero,
     # confirming the weather-trained model actually produced a forecast.
     assert preds["grid_import_kwh"].abs().sum() > 0
 
 
 def test_forecast_records_from_bundle_produces_full_horizon(raw_meters, config):
-    """The pure bundle→forecast helper returns a full-horizon record per device."""
-    from celine.meter_forecasting.forecast import forecast_records_from_bundle
+    """The pure bundle->forecast helper returns a full-horizon record per device."""
+    from celine.forecasting.meter.forecast import forecast_records_from_bundle
 
     processed, trained, export_eligible = _train_consumption_bundle(raw_meters, config)
 
@@ -154,7 +154,7 @@ def test_forecast_records_from_bundle_produces_full_horizon(raw_meters, config):
 def test_log_models_roundtrip_predicts(raw_meters, tmp_path):
     """A logged pyfunc model reloads and produces forecasts from raw meters."""
     mlflow = pytest.importorskip("mlflow")
-    from celine.meter_forecasting.tracking import get_tracker
+    from celine.forecasting.core.tracking import get_tracker
 
     config = load_config()
     config.tracking = {
@@ -166,7 +166,7 @@ def test_log_models_roundtrip_predicts(raw_meters, tmp_path):
     processed, trained, export_eligible = _train_consumption_bundle(raw_meters, config)
 
     tracker = get_tracker(config)
-    assert tracker.enabled, "mlflow is installed → real tracker expected"
+    assert tracker.enabled, "mlflow is installed -> real tracker expected"
 
     with tracker.run(run_name="train"):
         info = tracker.log_models(trained, config, export_eligible=export_eligible)
@@ -189,7 +189,7 @@ def test_logged_model_has_output_signature(raw_meters, tmp_path):
     ``serving._io_signature``); the output schema is the consumer contract.
     """
     pytest.importorskip("mlflow")
-    from celine.meter_forecasting.tracking import get_tracker
+    from celine.forecasting.core.tracking import get_tracker
 
     config = load_config()
     config.tracking = {
@@ -222,7 +222,7 @@ def test_pipeline_logs_per_device_child_runs(raw_meters, tmp_path):
     pytest.importorskip("mlflow")
     from mlflow.tracking import MlflowClient
 
-    from celine.meter_forecasting.pipeline import train_pipeline
+    from celine.forecasting.meter.pipeline import train_pipeline
 
     uri = f"sqlite:///{tmp_path / 'mlflow.db'}"
     config = load_config()
@@ -248,7 +248,7 @@ def test_pipeline_logs_per_device_child_runs(raw_meters, tmp_path):
 def test_pipeline_logs_registrable_model(raw_meters, tmp_path):
     """Running the pipeline with tracking on logs and registers the ensemble."""
     pytest.importorskip("mlflow")
-    from celine.meter_forecasting.pipeline import train_pipeline
+    from celine.forecasting.meter.pipeline import train_pipeline
 
     config = load_config()
     config.tracking = {

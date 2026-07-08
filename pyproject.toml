@@ -1,12 +1,12 @@
 [project]
-name = "celine-meter-forecasting"
+name = "celine-forecasting"
 version = "0.1.0"
-description = "Open-source 48h energy forecasting for smart meters (per-device LightGBM + CQR intervals)"
+description = "Open-source energy forecasting for smart meters and RECs (per-device and aggregate LightGBM + CQR/conformal intervals)"
 readme = "README.md"
 requires-python = ">=3.12"
 license = "Apache-2.0"
 authors = [{ name = "CELINE / SpindoxLabs" }]
-keywords = ["energy", "forecasting", "smart-meter", "lightgbm", "mlflow", "time-series"]
+keywords = ["energy", "forecasting", "smart-meter", "rec", "lightgbm", "mlflow", "time-series"]
 
 dependencies = [
     "lightgbm>=4.0.0",
@@ -17,6 +17,7 @@ dependencies = [
     "joblib>=1.3.0",
     "typer>=0.12.0",
     "pydantic-settings>=2.0.0",
+    "holidays>=0.40",
 ]
 
 [project.optional-dependencies]
@@ -29,7 +30,8 @@ dev = [
 ]
 
 [project.scripts]
-meter-forecast = "celine.meter_forecasting.cli:main"
+meter-forecast = "celine.forecasting.meter.cli:main"
+rec-forecast = "celine.forecasting.rec.cli:main"
 
 [build-system]
 requires = ["hatchling"]

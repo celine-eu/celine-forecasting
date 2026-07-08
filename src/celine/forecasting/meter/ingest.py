@@ -1,10 +1,10 @@
 """Forgiving ingestion of user meter files.
 
-The data contract (:mod:`celine.meter_forecasting.schema`) is strict on purpose, but real
+The data contract (:mod:`celine.forecasting.core.schema`) is strict on purpose, but real
 exports rarely use the exact column names or a UTC timezone. This module maps
 common aliases onto the contract and coerces the timestamp, so a user can point
 the tool at their file with minimal (often zero) manual reshaping. Anything it
-cannot resolve still fails loudly at :func:`celine.meter_forecasting.validation.validate_raw_schema`.
+cannot resolve still fails loudly at ``validate_raw_schema``.
 """
 
 from __future__ import annotations
@@ -13,7 +13,12 @@ import logging
 
 import pandas as pd
 
-from .schema import COL_CONSUMPTION, COL_DEVICE_ID, COL_PRODUCTION, COL_TIMESTAMP
+from celine.forecasting.core.schema import (
+    COL_CONSUMPTION,
+    COL_DEVICE_ID,
+    COL_PRODUCTION,
+    COL_TIMESTAMP,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -22,19 +27,49 @@ logger = logging.getLogger(__name__)
 #: ``immissione`` = export.
 COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     COL_DEVICE_ID: (
-        "device_id", "device", "meter_id", "meter", "serial", "id", "pod", "pdr",
+        "device_id",
+        "device",
+        "meter_id",
+        "meter",
+        "serial",
+        "id",
+        "pod",
+        "pdr",
     ),
     COL_TIMESTAMP: (
-        "ts", "timestamp", "time", "datetime", "date", "ts_utc", "reading_time",
-        "interval_start", "data",
+        "ts",
+        "timestamp",
+        "time",
+        "datetime",
+        "date",
+        "ts_utc",
+        "reading_time",
+        "interval_start",
+        "data",
     ),
     COL_CONSUMPTION: (
-        "consumption_kw", "consumption", "cons", "import", "grid_import", "kwh_in",
-        "energy_in", "active_energy_import", "prelievo", "consumo",
+        "consumption_kw",
+        "consumption",
+        "cons",
+        "import",
+        "grid_import",
+        "kwh_in",
+        "energy_in",
+        "active_energy_import",
+        "prelievo",
+        "consumo",
     ),
     COL_PRODUCTION: (
-        "production_kw", "production", "prod", "export", "grid_export", "kwh_out",
-        "energy_out", "active_energy_export", "immissione", "produzione",
+        "production_kw",
+        "production",
+        "prod",
+        "export",
+        "grid_export",
+        "kwh_out",
+        "energy_out",
+        "active_energy_export",
+        "immissione",
+        "produzione",
     ),
 }
 
@@ -70,7 +105,7 @@ def normalize_meters(
 
     Renames known column aliases and coerces the timestamp to timezone-aware
     UTC. This is best-effort: columns it cannot resolve are left untouched for
-    :func:`celine.meter_forecasting.validation.validate_raw_schema` to reject clearly.
+    :func:`celine.forecasting.meter.validation.validate_raw_schema` to reject clearly.
 
     Args:
         df: Raw meter DataFrame as loaded from the user's file.
@@ -98,7 +133,7 @@ def normalize_meters(
             if assume_tz.upper() == "UTC":
                 ts = ts.dt.tz_localize("UTC")
             else:
-                logger.info("Localising naive timestamps as %s → UTC", assume_tz)
+                logger.info("Localising naive timestamps as %s -> UTC", assume_tz)
                 ts = ts.dt.tz_localize(
                     assume_tz, ambiguous="NaT", nonexistent="shift_forward"
                 ).dt.tz_convert("UTC")

@@ -12,8 +12,8 @@ import logging
 
 import pandas as pd
 
-from .config import ForecastConfig
-from .schema import (
+from celine.forecasting.core.config import ForecastConfig
+from celine.forecasting.core.schema import (
     COL_DEVICE_ID,
     COL_GRID_EXPORT,
     COL_GRID_IMPORT,
@@ -86,7 +86,7 @@ def weather_correlations(
         daylight_only: Restrict to daylight hours (matches notebook 02).
 
     Returns:
-        Correlation frame (grid metrics × weather features); empty if no
+        Correlation frame (grid metrics x weather features); empty if no
         weather columns are present.
     """
     weather_cols = [c for c in config.features["weather_all"] if c in df.columns]

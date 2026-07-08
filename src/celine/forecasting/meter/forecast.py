@@ -13,9 +13,15 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from .config import ForecastConfig
+from celine.forecasting.core.config import ForecastConfig
+from celine.forecasting.core.schema import (
+    COL_DEVICE_ID,
+    COL_GRID_EXPORT,
+    COL_GRID_IMPORT,
+    COL_TS_HOUR,
+)
+
 from .features import get_features_for_target
-from .schema import COL_DEVICE_ID, COL_GRID_EXPORT, COL_GRID_IMPORT, COL_TS_HOUR
 
 logger = logging.getLogger(__name__)
 
@@ -156,8 +162,16 @@ def generate_forecast(
             models.get("cqr_Q_active", 0.0),
             models.get("cqr_Q_inactive", 0.0),
         )
-        X_q25 = X_band[models["q25"].feature_name()] if models["q25"].feature_name() != model_features else X_band
-        X_q75 = X_band[models["q75"].feature_name()] if models["q75"].feature_name() != model_features else X_band
+        X_q25 = (
+            X_band[models["q25"].feature_name()]
+            if models["q25"].feature_name() != model_features
+            else X_band
+        )
+        X_q75 = (
+            X_band[models["q75"].feature_name()]
+            if models["q75"].feature_name() != model_features
+            else X_band
+        )
         band_lower = np.maximum(0.0, models["q25"].predict(X_q25) - q_vec)
         band_upper = np.maximum(0.0, models["q75"].predict(X_q75) + q_vec)
         preds_lower[band_idx] = np.minimum(band_lower, band_main)
@@ -280,8 +294,8 @@ def assemble_forecast_records(
     """Combine export/import forecasts into the per-device JSON record.
 
     Args:
-        export_fc: grid_export forecast frame (or None → zeros).
-        import_fc: grid_import forecast frame (or None → zeros).
+        export_fc: grid_export forecast frame (or None -> zeros).
+        import_fc: grid_import forecast frame (or None -> zeros).
         device_id: Device identifier.
         forecast_origin: Forecast origin timestamp.
 

@@ -6,7 +6,7 @@ automatically if present. Dev defaults match the local docker-compose setup.
 
 Usage::
 
-    from celine.meter_forecasting.settings import settings
+    from celine.forecasting.core.settings import settings
 
     engine = create_engine(settings.database_url)
 """

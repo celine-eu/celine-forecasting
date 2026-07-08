@@ -1,7 +1,7 @@
 """Weather acquisition and feature construction from a geographic position.
 
 The CELINE models consume a set of hourly weather features (see
-:class:`celine.meter_forecasting.schema.WeatherDataContract`). In the demonstrator these
+:class:`celine.forecasting.core.schema.WeatherDataContract`). In the demonstrator these
 are produced by a private pipeline; this module is a self-contained,
 dependency-light reproduction so an external user only needs a **latitude /
 longitude** — no weather file, no feature engineering of their own.
@@ -12,7 +12,7 @@ Two layers, cleanly separated so the pure logic is testable without a network:
   `Open-Meteo <https://open-meteo.com/>`_ API (historical archive + forecast),
   using only the standard library.
 * :func:`build_weather_features` — turn those raw variables into the 12 features
-  the models expect (solar geometry, clear-sky index, degree-days, …). Pure
+  the models expect (solar geometry, clear-sky index, degree-days, ...). Pure
   NumPy/pandas, no I/O.
 
 :func:`download_weather_features` chains the two for the common case.
@@ -67,7 +67,7 @@ def solar_position(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute solar elevation and ``cos(zenith)`` for UTC timestamps.
 
-    Implements the NOAA solar-position equations (good to ~0.1°), vectorised
+    Implements the NOAA solar-position equations (good to ~0.1 deg), vectorised
     over the input index. No external dependency (e.g. pvlib) is required.
 
     Args:
@@ -77,7 +77,7 @@ def solar_position(
 
     Returns:
         ``(elevation_deg, cos_zenith)`` arrays aligned to ``times_utc``;
-        ``cos_zenith`` is clipped to ``[0, 1]`` (night → 0).
+        ``cos_zenith`` is clipped to ``[0, 1]`` (night -> 0).
     """
     idx = pd.DatetimeIndex(times_utc)
     if idx.tz is None:
@@ -109,7 +109,7 @@ def solar_position(
         - 0.040849 * np.sin(2 * gamma)
     )
 
-    # True solar time (minutes) → hour angle (degrees).
+    # True solar time (minutes) -> hour angle (degrees).
     true_solar_time = hour * 60.0 + eqtime + 4.0 * longitude
     hour_angle = np.radians(true_solar_time / 4.0 - 180.0)
 
@@ -123,7 +123,7 @@ def solar_position(
 
 
 def _haurwitz_clearsky_ghi(cos_zenith: np.ndarray) -> np.ndarray:
-    """Clear-sky global horizontal irradiance (W/m²) via the Haurwitz model.
+    """Clear-sky global horizontal irradiance (W/m2) via the Haurwitz model.
 
     A simple, dependency-free clear-sky estimate used to normalise measured
     shortwave radiation into a ``clearsky_index``.
@@ -132,7 +132,7 @@ def _haurwitz_clearsky_ghi(cos_zenith: np.ndarray) -> np.ndarray:
         cos_zenith: Cosine of the solar zenith angle (0 at/under the horizon).
 
     Returns:
-        Clear-sky GHI in W/m² (0 when the sun is below the horizon).
+        Clear-sky GHI in W/m2 (0 when the sun is below the horizon).
     """
     cz = np.clip(cos_zenith, 0.0, 1.0)
     with np.errstate(divide="ignore", invalid="ignore"):
@@ -155,10 +155,10 @@ def build_weather_features(
 ) -> pd.DataFrame:
     """Construct the model weather features from raw Open-Meteo variables.
 
-    The output matches :class:`celine.meter_forecasting.schema.WeatherDataContract`
+    The output matches :class:`celine.forecasting.core.schema.WeatherDataContract`
     (``datetime`` + the 12 recommended columns). ``ghi_ramp`` is intentionally
     *not* produced here — it is derived downstream by
-    :func:`celine.meter_forecasting.cleaning.prepare_weather`.
+    :func:`celine.forecasting.meter.cleaning.prepare_weather`.
 
     Args:
         raw: Hourly frame with a ``datetime`` column (UTC) and at least
@@ -168,7 +168,7 @@ def build_weather_features(
         longitude: Site longitude (degrees east) — for solar geometry.
         heating_base_c: Base temperature for heating-degree hours.
         cooling_base_c: Base temperature for cooling-degree hours.
-        pv_temp_coeff: PV power temperature coefficient (per °C above ref).
+        pv_temp_coeff: PV power temperature coefficient (per deg C above ref).
         pv_temp_ref_c: Reference cell temperature for ``pv_temp_factor``.
 
     Returns:
@@ -189,9 +189,7 @@ def build_weather_features(
     times = pd.to_datetime(df[COL_WEATHER_TIME], utc=True)
     df[COL_WEATHER_TIME] = times
 
-    elevation_deg, cos_zenith = solar_position(
-        pd.DatetimeIndex(times), latitude, longitude
-    )
+    elevation_deg, cos_zenith = solar_position(pd.DatetimeIndex(times), latitude, longitude)
 
     temp = df["temperature_2m"].to_numpy(dtype=float)
     shortwave = df["shortwave_radiation"].to_numpy(dtype=float)
@@ -401,7 +399,7 @@ def download_weather_features(
 ) -> pd.DataFrame:
     """Download and build model-ready weather features for a position.
 
-    Convenience wrapper: :func:`download_raw_weather` →
+    Convenience wrapper: :func:`download_raw_weather` ->
     :func:`build_weather_features`. The result drops straight into
     ``train_pipeline(..., df_weather=...)``.
 

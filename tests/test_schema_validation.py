@@ -5,9 +5,9 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from celine.meter_forecasting.cleaning import build_processed_hourly
-from celine.meter_forecasting.schema import METER_CONTRACT, WEATHER_CONTRACT
-from celine.meter_forecasting.validation import (
+from celine.forecasting.core.schema import METER_CONTRACT, WEATHER_CONTRACT
+from celine.forecasting.meter.cleaning import build_processed_hourly
+from celine.forecasting.meter.validation import (
     InsufficientDataError,
     SchemaError,
     assess_sufficiency,

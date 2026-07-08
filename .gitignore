@@ -23,3 +23,5 @@ mlruns/
 *.local.yaml
 out
 data/
+
+*_forecast_out/

@@ -4,22 +4,22 @@ from __future__ import annotations
 
 import numpy as np
 
-from celine.meter_forecasting.cleaning import build_processed_hourly
-from celine.meter_forecasting.features import (
+from celine.forecasting.core.schema import COL_DEVICE_ID, COL_TS_HOUR
+from celine.forecasting.meter.cleaning import build_processed_hourly
+from celine.forecasting.meter.features import (
     build_monotonic_constraints,
     get_features_for_target,
 )
-from celine.meter_forecasting.model import (
+from celine.forecasting.meter.model import (
     compute_cqr_q,
     compute_eligibility,
     lgb_param_sets,
     train_band_models,
 )
-from celine.meter_forecasting.schema import COL_DEVICE_ID, COL_TS_HOUR
 
 
 def test_grid_import_point_model_uses_tweedie(config):
-    """grid_import is zero-inflated → the point model uses Tweedie, not L2.
+    """grid_import is zero-inflated -> the point model uses Tweedie, not L2.
 
     Mirrors LGB_PARAMS_IMPORT in M1_meters/03_forecasting.ipynb. The quantile
     models stay on the quantile objective.
@@ -54,7 +54,7 @@ def test_weather_features_filtered_by_availability(config):
     feats = get_features_for_target(
         "grid_export", config, has_pv=True, available_columns={"hour_sin", "horizon"}
     )
-    assert "global_tilted_irradiance" not in feats  # not available → dropped
+    assert "global_tilted_irradiance" not in feats  # not available -> dropped
 
 
 def test_monotonic_constraints_align(config):

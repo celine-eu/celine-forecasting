@@ -19,19 +19,30 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 import pandas as pd
 import typer
 
+from celine.forecasting.core.config import ForecastConfig
+from celine.forecasting.core.config import load_config as _core_load_config
+from celine.forecasting.core.schema import (
+    COL_DEVICE_ID,
+    COL_GRID_EXPORT,
+    COL_GRID_IMPORT,
+    COL_TS_HOUR,
+    InsufficientDataError,
+)
+
 from .cleaning import build_processed_hourly
-from .config import ForecastConfig, load_config
-from .io import load_meters, load_weather
+from .ingest import normalize_meters
 from .pipeline import train_pipeline
-from .schema import COL_DEVICE_ID, COL_GRID_EXPORT, COL_GRID_IMPORT, COL_TS_HOUR
-from .validation import InsufficientDataError, assess_sufficiency, eligibility_to_frame
+from .validation import assess_sufficiency, eligibility_to_frame, validate_raw_schema
 
 logger = logging.getLogger(__name__)
+
+#: Path to the meter pipeline's default configuration.
+_METER_DEFAULT_CONFIG = Path(__file__).resolve().parent / "config" / "default_config.yaml"
 
 app = typer.Typer(
     name="meter-forecast",
@@ -39,16 +50,24 @@ app = typer.Typer(
     add_completion=False,
 )
 
-Config = Annotated[Optional[Path], typer.Option(help="Path to a YAML config (defaults to packaged config)")]
-DatasetsConfig = Annotated[Optional[Path], typer.Option(help="Datasets-only YAML overlay (merged on top of --config)")]
+Config = Annotated[
+    Path | None, typer.Option(help="Path to a YAML config (defaults to packaged config)")
+]
+DatasetsConfig = Annotated[
+    Path | None, typer.Option(help="Datasets-only YAML overlay (merged on top of --config)")
+]
 Verbose = Annotated[bool, typer.Option("--verbose", "-v", help="Enable debug logging")]
-Meters = Annotated[Optional[Path], typer.Option(help="Meter CSV/Parquet (15-min readings)")]
-Weather = Annotated[Optional[Path], typer.Option(help="Optional weather CSV/Parquet (hourly)")]
+Meters = Annotated[Path | None, typer.Option(help="Meter CSV/Parquet (15-min readings)")]
+Weather = Annotated[Path | None, typer.Option(help="Optional weather CSV/Parquet (hourly)")]
 AssumeTz = Annotated[str, typer.Option(help="Timezone for naive meter timestamps")]
-DbUri = Annotated[Optional[str], typer.Option(help="SQLAlchemy DB URI (overrides datasets.uri in config)")]
-DeviceIds = Annotated[Optional[list[str]], typer.Option(help="Only load these device IDs from the database")]
-Lat = Annotated[Optional[float], typer.Option(help="Site latitude — auto-download weather")]
-Lon = Annotated[Optional[float], typer.Option(help="Site longitude — auto-download weather")]
+DbUri = Annotated[
+    str | None, typer.Option(help="SQLAlchemy DB URI (overrides datasets.uri in config)")
+]
+DeviceIds = Annotated[
+    list[str] | None, typer.Option(help="Only load these device IDs from the database")
+]
+Lat = Annotated[float | None, typer.Option(help="Site latitude — auto-download weather")]
+Lon = Annotated[float | None, typer.Option(help="Site longitude — auto-download weather")]
 Output = Annotated[Path, typer.Option(help="Output directory")]
 
 
@@ -60,10 +79,30 @@ def _setup_logging(verbose: bool) -> None:
 
 
 def _load_config(config: Path | None, datasets_config: Path | None) -> ForecastConfig:
-    return load_config(
+    return _core_load_config(
         str(config) if config else None,
         overlay=str(datasets_config) if datasets_config else None,
+        default_path=_METER_DEFAULT_CONFIG,
     )
+
+
+def _load_meters(path: str | Path, *, assume_tz: str = "UTC") -> pd.DataFrame:
+    """Load meters from a file with meter-specific normalization/validation."""
+    from celine.forecasting.core.io import load_meters as _core_load_meters
+
+    return _core_load_meters(
+        path,
+        assume_tz=assume_tz,
+        normalizer=normalize_meters,
+        validator=validate_raw_schema,
+    )
+
+
+def _load_weather(path: str | Path) -> pd.DataFrame:
+    """Load weather from a file with meter-specific validation."""
+    from celine.forecasting.core.io import load_weather as _core_load_weather
+
+    return _core_load_weather(path, validator=validate_raw_schema)
 
 
 def _load_meters_from_opts(
@@ -75,11 +114,11 @@ def _load_meters_from_opts(
     device_ids: list[str] | None,
 ) -> pd.DataFrame:
     if meters:
-        return load_meters(str(meters), assume_tz=assume_tz)
+        return _load_meters(str(meters), assume_tz=assume_tz)
 
     datasets = config.datasets
     if datasets and datasets.get("meters"):
-        from .db import build_engine, load_meters_from_db
+        from celine.forecasting.core.db import build_engine, load_meters_from_db
 
         uri = db_uri or datasets.get("uri")
         engine = build_engine(uri)
@@ -87,6 +126,8 @@ def _load_meters_from_opts(
             datasets["meters"],
             engine=engine,
             device_ids=device_ids,
+            normalizer=normalize_meters,
+            validator=validate_raw_schema,
         )
 
     typer.echo(
@@ -106,22 +147,27 @@ def _resolve_weather(
     db_uri: str | None = None,
 ) -> pd.DataFrame | None:
     if weather_path:
-        return load_weather(str(weather_path))
+        return _load_weather(str(weather_path))
 
     datasets = config.datasets
     if datasets and datasets.get("weather"):
-        from .db import build_engine, load_weather_from_db
+        from celine.forecasting.core.db import build_engine, load_weather_from_db
 
         uri = db_uri or datasets.get("uri")
         engine = build_engine(uri)
-        return load_weather_from_db(datasets["weather"], engine=engine)
+        return load_weather_from_db(
+            datasets["weather"],
+            engine=engine,
+            validator=validate_raw_schema,
+        )
 
     if lat is None or lon is None:
         logger.info("No weather source configured — running weather-free.")
         return None
 
+    from celine.forecasting.core.weather import download_weather_features
+
     from .cleaning import aggregate_to_hourly
-    from .weather import download_weather_features
 
     hourly = aggregate_to_hourly(df_meters, config)
     start = hourly[COL_TS_HOUR].min()
@@ -156,25 +202,39 @@ def run(
     device_ids: DeviceIds = None,
     lat: Lat = None,
     lon: Lon = None,
-    output: Output = Path("meter_forecast_out"),
+    output: Output = Path("out/meter"),
     cv: Annotated[bool, typer.Option(help="Also run cross-validation (slower)")] = False,
     full_retrain: Annotated[bool, typer.Option(help="Force full retrain from scratch")] = False,
-    jobs: Annotated[Optional[int], typer.Option("-j", "--jobs", help="Parallel devices")] = None,
+    jobs: Annotated[int | None, typer.Option("-j", "--jobs", help="Parallel devices")] = None,
 ) -> None:
     """Daily run: incremental retrain + forecast (full retrain if no prior model)."""
     _setup_logging(verbose)
     cfg = _load_config(config, datasets_config)
     df_meters = _load_meters_from_opts(
-        cfg, meters=meters, assume_tz=assume_tz, db_uri=db_uri, device_ids=device_ids,
+        cfg,
+        meters=meters,
+        assume_tz=assume_tz,
+        db_uri=db_uri,
+        device_ids=device_ids,
     )
     df_weather = _resolve_weather(
-        df_meters, cfg, weather_path=weather, lat=lat, lon=lon, db_uri=db_uri,
+        df_meters,
+        cfg,
+        weather_path=weather,
+        lat=lat,
+        lon=lon,
+        db_uri=db_uri,
     )
     try:
         result = train_pipeline(
-            df_meters, cfg, df_weather=df_weather,
-            do_cv=cv, do_backtest=False, full_retrain=full_retrain,
-            n_jobs=jobs, output_dir=str(output),
+            df_meters,
+            cfg,
+            df_weather=df_weather,
+            do_cv=cv,
+            do_backtest=False,
+            full_retrain=full_retrain,
+            n_jobs=jobs,
+            output_dir=str(output),
         )
     except InsufficientDataError as exc:
         typer.echo(str(exc), err=True)
@@ -201,9 +261,13 @@ def validate(
     _setup_logging(verbose)
     cfg = _load_config(config, datasets_config)
     df_meters = _load_meters_from_opts(
-        cfg, meters=meters, assume_tz=assume_tz, db_uri=db_uri, device_ids=device_ids,
+        cfg,
+        meters=meters,
+        assume_tz=assume_tz,
+        db_uri=db_uri,
+        device_ids=device_ids,
     )
-    df_weather = load_weather(str(weather)) if weather else None
+    df_weather = _load_weather(str(weather)) if weather else None
     processed = build_processed_hourly(df_meters, cfg, df_weather=df_weather)
     try:
         verdicts = assess_sufficiency(processed, cfg)
@@ -234,22 +298,36 @@ def train(
     backtest: Annotated[bool, typer.Option(help="Also run the rolling backtest")] = False,
     no_cv: Annotated[bool, typer.Option(help="Skip cross-validation")] = False,
     full_retrain: Annotated[bool, typer.Option(help="Force full retrain from scratch")] = False,
-    jobs: Annotated[Optional[int], typer.Option("-j", "--jobs", help="Parallel devices")] = None,
+    jobs: Annotated[int | None, typer.Option("-j", "--jobs", help="Parallel devices")] = None,
 ) -> None:
     """Train models and write forecasts."""
     _setup_logging(verbose)
     cfg = _load_config(config, datasets_config)
     df_meters = _load_meters_from_opts(
-        cfg, meters=meters, assume_tz=assume_tz, db_uri=db_uri, device_ids=device_ids,
+        cfg,
+        meters=meters,
+        assume_tz=assume_tz,
+        db_uri=db_uri,
+        device_ids=device_ids,
     )
     df_weather = _resolve_weather(
-        df_meters, cfg, weather_path=weather, lat=lat, lon=lon, db_uri=db_uri,
+        df_meters,
+        cfg,
+        weather_path=weather,
+        lat=lat,
+        lon=lon,
+        db_uri=db_uri,
     )
     try:
         result = train_pipeline(
-            df_meters, cfg, df_weather=df_weather,
-            do_cv=not no_cv, do_backtest=backtest, full_retrain=full_retrain,
-            n_jobs=jobs, output_dir=str(output),
+            df_meters,
+            cfg,
+            df_weather=df_weather,
+            do_cv=not no_cv,
+            do_backtest=backtest,
+            full_retrain=full_retrain,
+            n_jobs=jobs,
+            output_dir=str(output),
         )
     except InsufficientDataError as exc:
         typer.echo(str(exc), err=True)
@@ -270,7 +348,9 @@ def evaluate(
     assume_tz: AssumeTz = "UTC",
     db_uri: DbUri = None,
     device_ids: DeviceIds = None,
-    forecasts_dir: Annotated[Path, typer.Option(help="Directory containing forecasts.json")] = Path("meter_forecast_out"),
+    forecasts_dir: Annotated[Path, typer.Option(help="Directory containing forecasts.json")] = Path(
+        "meter_forecast_out"
+    ),
 ) -> None:
     """Evaluate previous forecasts against actual meter data."""
     _setup_logging(verbose)
@@ -285,16 +365,21 @@ def evaluate(
         forecasts = json.load(f)
 
     df_meters = _load_meters_from_opts(
-        cfg, meters=meters, assume_tz=assume_tz, db_uri=db_uri, device_ids=device_ids,
+        cfg,
+        meters=meters,
+        assume_tz=assume_tz,
+        db_uri=db_uri,
+        device_ids=device_ids,
     )
 
+    from celine.forecasting.core.evaluation import calc_mae, calc_rmse
+
     from .cleaning import aggregate_to_hourly
-    from .evaluation import calc_mae, calc_rmse
 
     hourly = aggregate_to_hourly(df_meters, cfg)
     tracker = None
     try:
-        from .tracking import get_tracker
+        from celine.forecasting.core.tracking import get_tracker
 
         tracker = get_tracker(cfg)
     except Exception:
@@ -318,7 +403,9 @@ def evaluate(
 
         merged = fc_df.merge(dev_actual, on=COL_TS_HOUR, how="inner")
         if merged.empty:
-            logger.warning("No overlapping timestamps for %s — actuals may not have arrived yet", device_id)
+            logger.warning(
+                "No overlapping timestamps for %s — actuals may not have arrived yet", device_id
+            )
             continue
 
         device_metrics: dict[str, float] = {}
@@ -343,9 +430,8 @@ def evaluate(
             lower_col = fc_col.replace("_kwh", "_lower")
             upper_col = fc_col.replace("_kwh", "_upper")
             if lower_col in merged.columns and upper_col in merged.columns:
-                in_interval = (
-                    (actual[mask] >= merged[lower_col].values[mask])
-                    & (actual[mask] <= merged[upper_col].values[mask])
+                in_interval = (actual[mask] >= merged[lower_col].values[mask]) & (
+                    actual[mask] <= merged[upper_col].values[mask]
                 )
                 device_metrics[f"eval_coverage_{target}"] = float(in_interval.mean())
 
@@ -364,7 +450,9 @@ def evaluate(
 
     report = pd.DataFrame(results)
     typer.echo(report.round(4).to_string(index=False))
-    typer.echo(f"\nEvaluated {len(results)} device(s) over {int(report['eval_n_hours'].mean())} avg hours.")
+    typer.echo(
+        f"\nEvaluated {len(results)} device(s) over {int(report['eval_n_hours'].mean())} avg hours."
+    )
 
     eval_path = forecasts_dir / "evaluation.csv"
     report.to_csv(eval_path, index=False)
@@ -377,14 +465,16 @@ def cleanup(
     datasets_config: DatasetsConfig = None,
     verbose: Verbose = False,
     retention_days: Annotated[int, typer.Option(help="Delete runs older than N days")] = 7,
-    device_id: Annotated[Optional[str], typer.Option(help="Only clean this device")] = None,
-    dry_run: Annotated[bool, typer.Option(help="Show what would be deleted without deleting")] = False,
+    device_id: Annotated[str | None, typer.Option(help="Only clean this device")] = None,
+    dry_run: Annotated[
+        bool, typer.Option(help="Show what would be deleted without deleting")
+    ] = False,
 ) -> None:
     """Clean up old MLflow runs and model artifacts."""
     _setup_logging(verbose)
     cfg = _load_config(config, datasets_config)
 
-    from .tracking import get_tracker
+    from celine.forecasting.core.tracking import get_tracker
 
     tracker = get_tracker(cfg)
     if not tracker.enabled:

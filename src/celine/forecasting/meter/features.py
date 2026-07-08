@@ -14,8 +14,8 @@ import warnings
 import numpy as np
 import pandas as pd
 
-from .config import ForecastConfig
-from .schema import COL_TS_HOUR
+from celine.forecasting.core.config import ForecastConfig
+from celine.forecasting.core.schema import COL_TS_HOUR
 
 logger = logging.getLogger(__name__)
 
@@ -166,7 +166,7 @@ def prepare_training_data(
             for d in range(1, 8)
         ]
         with warnings.catch_warnings():
-            # Early rows have no history → all-NaN slice; NaN mean is intended.
+            # Early rows have no history -> all-NaN slice; NaN mean is intended.
             warnings.simplefilter("ignore", RuntimeWarning)
             hdf[f"{target}_mean_same_hour_7d"] = np.nanmean(np.column_stack(day_cols), axis=1)
         hdf[f"{target}_diff_1d"] = hdf[f"{target}_same_hour_1d"] - hdf[f"{target}_same_hour_2d"]

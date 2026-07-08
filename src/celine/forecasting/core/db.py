@@ -1,9 +1,9 @@
 """SQL data loaders for PostgreSQL databases.
 
 Optional module — requires ``sqlalchemy`` (install with
-``uv add celine-meter-forecasting[db]``). Loads meter and weather data
-from user-configured database tables, applies the same normalization and
-validation as the file-based loaders in :mod:`celine.meter_forecasting.io`.
+``uv add celine-forecasting[db]``). Loads meter and weather data
+from user-configured database tables. Normalization and validation are
+injected as callables so that this module remains pipeline-agnostic.
 
 Table sources and column mappings are declared in the pipeline YAML config
 under the ``datasets`` key. See ``examples/datasets.yaml`` for a sample.
@@ -12,14 +12,13 @@ under the ``datasets`` key. See ``examples/datasets.yaml`` for a sample.
 from __future__ import annotations
 
 import logging
-import os
 import re
+from collections.abc import Callable
 from typing import Any
 
 import pandas as pd
 
-from .ingest import normalize_meters
-from .validation import SchemaError, validate_raw_schema
+from .schema import SchemaError
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +33,7 @@ def _require_sqlalchemy():
     except ImportError:
         raise ImportError(
             "sqlalchemy is required for database loading. "
-            "Install with: uv add celine-meter-forecasting[db]"
+            "Install with: uv add celine-forecasting[db]"
         ) from None
 
 
@@ -53,9 +52,7 @@ def build_engine(uri: str | None = None):
 
 def _validate_table_name(table: str) -> None:
     if not _TABLE_RE.match(table):
-        raise ValueError(
-            f"Invalid table name {table!r} — must match [a-zA-Z_][a-zA-Z0-9_.]*"
-        )
+        raise ValueError(f"Invalid table name {table!r} — must match [a-zA-Z_][a-zA-Z0-9_.]*")
 
 
 def _read_table(
@@ -88,6 +85,8 @@ def load_meters_from_db(
     *,
     engine: Any,
     device_ids: list[str] | None = None,
+    normalizer: Callable[..., pd.DataFrame] | None = None,
+    validator: Callable[..., Any] | None = None,
 ) -> pd.DataFrame:
     """Load and merge meter data from one or more database tables.
 
@@ -100,6 +99,10 @@ def load_meters_from_db(
             ``{source: contract}`` map), and ``assume_tz`` (default ``"UTC"``).
         engine: A SQLAlchemy engine (from :func:`build_engine`).
         device_ids: Optional filter — only load these device IDs.
+        normalizer: Callable ``(df, *, assume_tz, column_map) -> DataFrame``
+            that maps column aliases and coerces the timestamp.
+        validator: Callable ``(df, *, kind) -> None`` that validates the
+            resulting frame against the data contract.
 
     Returns:
         A merged, deduplicated DataFrame satisfying the meter contract.
@@ -112,11 +115,12 @@ def load_meters_from_db(
         if raw.empty:
             logger.warning("No rows from %s", table)
             continue
-        raw = normalize_meters(
-            raw,
-            assume_tz=source.get("assume_tz", "UTC"),
-            column_map=source.get("columns"),
-        )
+        if normalizer is not None:
+            raw = normalizer(
+                raw,
+                assume_tz=source.get("assume_tz", "UTC"),
+                column_map=source.get("columns"),
+            )
         frames.append(raw)
 
     if not frames:
@@ -130,7 +134,8 @@ def load_meters_from_db(
     if dupes:
         logger.info("Dropped %d duplicate (device_id, ts) rows after merge", dupes)
 
-    validate_raw_schema(df, kind="meter")
+    if validator is not None:
+        validator(df, kind="meter")
     logger.info("Loaded %d meter rows from %d DB source(s)", len(df), len(meters_config))
     return df
 
@@ -139,6 +144,7 @@ def load_weather_from_db(
     weather_config: list[dict[str, Any]] | dict[str, Any],
     *,
     engine: Any,
+    validator: Callable[..., Any] | None = None,
 ) -> pd.DataFrame:
     """Load and merge weather features from one or more database tables.
 
@@ -150,6 +156,8 @@ def load_weather_from_db(
             backwards compat) from the pipeline YAML. Each entry has
             ``table`` (required) and optionally ``columns`` for renaming.
         engine: A SQLAlchemy engine.
+        validator: Callable ``(df, *, kind) -> None`` that validates the
+            resulting frame against the weather data contract.
 
     Returns:
         A merged, deduplicated DataFrame satisfying the weather contract.
@@ -187,6 +195,7 @@ def load_weather_from_db(
         if dupes:
             logger.info("Dropped %d duplicate weather rows after merge", dupes)
 
-    validate_raw_schema(df, kind="weather")
+    if validator is not None:
+        validator(df, kind="weather")
     logger.info("Loaded %d weather rows from %d source(s)", len(df), len(weather_config))
     return df

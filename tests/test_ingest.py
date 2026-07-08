@@ -5,8 +5,8 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from celine.meter_forecasting.ingest import normalize_meters
-from celine.meter_forecasting.validation import SchemaError, validate_raw_schema
+from celine.forecasting.meter.ingest import normalize_meters
+from celine.forecasting.meter.validation import SchemaError, validate_raw_schema
 
 
 def test_aliases_renamed_to_contract():

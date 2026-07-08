@@ -7,7 +7,7 @@ ensemble plus its config and, given raw 15-minute meter readings, returns a flat
 forecast table.
 
 This module imports ``mlflow`` at import time and is therefore only imported
-lazily from :mod:`celine.meter_forecasting.tracking` (the MLflow-enabled code path); the
+lazily from :mod:`celine.forecasting.core.tracking` (the MLflow-enabled code path); the
 core package never depends on it.
 """
 
@@ -18,13 +18,14 @@ from pathlib import Path
 from typing import Any
 
 import joblib
-import mlflow
 import pandas as pd
 from mlflow.models.signature import ModelSignature
 from mlflow.types import ColSpec, DataType, Schema
 
+import mlflow
+from celine.forecasting.core.config import load_config as _core_load_config
+
 from .cleaning import build_processed_hourly, prepare_weather
-from .config import load_config
 from .forecast import forecast_records_from_bundle
 
 _BUNDLE_FILE = "trained_models.pkl"
@@ -54,8 +55,7 @@ def _split_input(
     if isinstance(model_input, dict):
         if "meters" not in model_input:
             raise ValueError(
-                "dict input must contain a 'meters' frame; got keys "
-                f"{sorted(model_input)}"
+                f"dict input must contain a 'meters' frame; got keys {sorted(model_input)}"
             )
         return model_input["meters"], model_input.get("weather")
     return model_input, None
@@ -91,7 +91,7 @@ def _io_signature() -> ModelSignature:
 
 
 class MeterForecastModel(mlflow.pyfunc.PythonModel):
-    """pyfunc model: raw meter readings → per-device 48h forecast table.
+    """pyfunc model: raw meter readings -> per-device 48h forecast table.
 
     Loaded from three artefacts: the joblib-pickled model bundle, the config
     YAML, and a metadata JSON carrying the PV-eligible device set.
@@ -100,14 +100,12 @@ class MeterForecastModel(mlflow.pyfunc.PythonModel):
     def load_context(self, context: Any) -> None:
         """Load the ensemble, config and metadata from logged artefacts."""
         self._bundle = joblib.load(context.artifacts["bundle"])
-        self._config = load_config(context.artifacts["config"])
+        self._config = _core_load_config(context.artifacts["config"])
         with open(context.artifacts["metadata"], encoding="utf-8") as handle:
             meta = json.load(handle)
         self._export_eligible = set(meta.get("export_eligible", []))
 
-    def predict(
-        self, context: Any, model_input: Any, params: dict | None = None
-    ) -> pd.DataFrame:
+    def predict(self, context: Any, model_input: Any, params: dict | None = None) -> pd.DataFrame:
         """Forecast every device in the bundle from raw 15-minute readings.
 
         Args:
@@ -129,9 +127,7 @@ class MeterForecastModel(mlflow.pyfunc.PythonModel):
         # prepare_weather is also called inside build_processed_hourly, but that
         # prepared frame is not exposed; the recursive forecaster needs its own
         # copy. This mirrors how train_pipeline wires weather (see pipeline.py).
-        weather_prepared = (
-            prepare_weather(weather, self._config) if weather is not None else None
-        )
+        weather_prepared = prepare_weather(weather, self._config) if weather is not None else None
         records = forecast_records_from_bundle(
             processed,
             self._config,

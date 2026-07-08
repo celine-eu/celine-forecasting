@@ -96,10 +96,7 @@ class MlflowTracker(BaseTracker):
 
         self._mlflow = mlflow
         tracking_cfg = config.tracking
-        uri = (
-            tracking_cfg.get("tracking_uri")
-            or settings.mlflow_tracking_uri
-        )
+        uri = tracking_cfg.get("tracking_uri") or settings.mlflow_tracking_uri
         os.environ.setdefault("MLFLOW_S3_ENDPOINT_URL", settings.mlflow_s3_endpoint_url)
         os.environ.setdefault("AWS_ACCESS_KEY_ID", settings.aws_access_key_id)
         os.environ.setdefault("AWS_SECRET_ACCESS_KEY", settings.aws_secret_access_key)
@@ -143,10 +140,7 @@ class MlflowTracker(BaseTracker):
                     booster = bundle.get(model_key)
                     if booster is not None and hasattr(booster, "save_model"):
                         booster.save_model(str(band_dir / f"{model_key}.lgb"))
-                meta = {
-                    k: v for k, v in bundle.items()
-                    if k not in ("main", "q25", "q75")
-                }
+                meta = {k: v for k, v in bundle.items() if k not in ("main", "q25", "q75")}
                 joblib.dump(meta, band_dir / "meta.pkl")
             self._mlflow.log_artifacts(tmpdir, artifact_path="models")
 
@@ -292,7 +286,7 @@ class MlflowTracker(BaseTracker):
     ) -> Any:
         if not trained_models:
             return None
-        from .serving import log_forecast_model
+        from celine.forecasting.meter.serving import log_forecast_model
 
         return log_forecast_model(
             trained_models,
@@ -311,5 +305,7 @@ def get_tracker(config: ForecastConfig) -> BaseTracker:
     try:
         return MlflowTracker(config)
     except ImportError:
-        logger.warning("mlflow not installed — install `meter-forecast[mlflow]` to enable tracking")
+        logger.warning(
+            "mlflow not installed — install `celine-forecasting[mlflow]` to enable tracking"
+        )
         return BaseTracker()
