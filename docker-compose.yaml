@@ -44,6 +44,18 @@ services:
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      # Auth plugin (celine-mlflow-auth)
+      MLFLOW_AUTH_CONFIG_PATH: /etc/mlflow/celine_auth.ini
+      MLFLOW_FLASK_SERVER_SECRET_KEY: "${MLFLOW_FLASK_SERVER_SECRET_KEY:-change-me-in-production}"
+      # Local dev defaults point to the celine-policies Keycloak
+      CELINE_MLFLOW_AUTH_JWKS_URL: "${CELINE_MLFLOW_AUTH_JWKS_URL:-http://keycloak.celine.localhost/realms/celine/protocol/openid-connect/certs}"
+      CELINE_MLFLOW_AUTH_JWT_AUDIENCE: "${CELINE_MLFLOW_AUTH_JWT_AUDIENCE:-}"
+      CELINE_MLFLOW_AUTH_CLI_ADMIN_AZP: "${CELINE_MLFLOW_AUTH_CLI_ADMIN_AZP:-celine-cli}"
+      CELINE_MLFLOW_AUTH_SYNC_CACHE_TTL: "${CELINE_MLFLOW_AUTH_SYNC_CACHE_TTL:-60}"
+      CELINE_MLFLOW_AUTH_DATABASE_URI: "${CELINE_MLFLOW_AUTH_DATABASE_URI:-postgresql://postgres:securepassword123@172.17.0.1:15432/mlflow}"
+      CELINE_MLFLOW_AUTH_ADMIN_PASSWORD: "${CELINE_MLFLOW_AUTH_ADMIN_PASSWORD:-changeme-strong-password}"
+    extra_hosts:
+      - "keycloak.celine.localhost:host-gateway"
     ports:
       - "5000:5000"
     depends_on:
@@ -55,6 +67,8 @@ services:
       mlflow server
         --host 0.0.0.0
         --port 5000
+        --app-name celine-auth
+        --allowed-hosts mlflow.celine.localhost,localhost
         --backend-store-uri postgresql://postgres:securepassword123@172.17.0.1:15432/mlflow
         --default-artifact-root s3://mlflow-artifacts
         --artifacts-destination s3://mlflow-artifacts
