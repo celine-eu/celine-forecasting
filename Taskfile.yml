@@ -26,19 +26,19 @@ tasks:
     desc: "Daily run — incremental retrain + forecast (lightgbm)"
     deps: [install, mlflow]
     cmds:
-      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}} {{.CLI_ARGS}}
+      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}}/lightgbm {{.CLI_ARGS}}
 
   run:full:
     desc: Full retrain from scratch (lightgbm)
     deps: [install, mlflow]
     cmds:
-      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}} --full-retrain {{.CLI_ARGS}}
+      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}}/lightgbm --full-retrain {{.CLI_ARGS}}
 
   train:
     desc: Full training with backtest (lightgbm)
     deps: [install, mlflow]
     cmds:
-      - uv run meter-forecast train --datasets-config {{.CONFIG}} --output {{.OUTPUT}} --backtest {{.CLI_ARGS}}
+      - uv run meter-forecast train --datasets-config {{.CONFIG}} --output {{.OUTPUT}}/lightgbm --backtest {{.CLI_ARGS}}
 
   evaluate:
     desc: Evaluate previous forecasts against actuals
@@ -52,35 +52,35 @@ tasks:
     deps: [mlflow]
     cmds:
       - uv sync --extra mlflow --extra db --group ttm
-      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}} --model ttm {{.CLI_ARGS}}
+      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}}/ttm --model ttm -j 1 {{.CLI_ARGS}}
 
   run:chronos-bolt:
     desc: "Train with Chronos-Bolt (Amazon, zero-shot univariate)"
     deps: [mlflow]
     cmds:
       - uv sync --extra mlflow --extra db --group chronos
-      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}} --model chronos_bolt {{.CLI_ARGS}}
+      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}}/chronos_bolt --model chronos_bolt -j 1 {{.CLI_ARGS}}
 
   run:chronos2:
     desc: "Train with Chronos-2 (Amazon, zero-shot with covariates)"
     deps: [mlflow]
     cmds:
       - uv sync --extra mlflow --extra db --group chronos
-      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}} --model chronos2 {{.CLI_ARGS}}
+      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}}/chronos2 --model chronos2 -j 1 {{.CLI_ARGS}}
 
   run:timesfm:
     desc: "Train with TimesFM 2.5 (Google, zero-shot univariate)"
     deps: [mlflow]
     cmds:
       - uv sync --extra mlflow --extra db --group timesfm25
-      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}} --model timesfm25 {{.CLI_ARGS}}
+      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}}/timesfm25 --model timesfm25 -j 1 {{.CLI_ARGS}}
 
   run:moirai:
     desc: "Train with Moirai (Salesforce, zero-shot with covariates)"
     deps: [mlflow]
     cmds:
       - uv sync --extra mlflow --extra db --group moirai
-      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}} --model moirai {{.CLI_ARGS}}
+      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}}/moirai --model moirai -j 1 {{.CLI_ARGS}}
 
   # ── Smoke tests (verify backend loads on GPU) ───────────────────────────────
 

@@ -318,7 +318,7 @@ timesfm25 = [
     { name = "torch" },
 ]
 ttm = [
-    { name = "granite-tsfm", specifier = "==0.3.6" },
+    { name = "granite-tsfm", specifier = ">=0.3.6" },
     { name = "torch" },
     { name = "transformers" },
 ]

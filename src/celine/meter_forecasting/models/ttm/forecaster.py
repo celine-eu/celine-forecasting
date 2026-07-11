@@ -29,6 +29,11 @@ from .config import ttm_settings
 
 _AVAILABLE = importlib.util.find_spec("tsfm_public") is not None
 
+# Force the lazy-module resolution in the main thread — _LazyModule from
+# transformers is not thread-safe, and joblib threads race on first import.
+if _AVAILABLE:
+    from tsfm_public import TimeSeriesPreprocessor as _  # noqa: F401
+
 
 class TTMFitted(NeuralFitted):
     """A fitted TTM model for one (device, target) or one pooled group."""

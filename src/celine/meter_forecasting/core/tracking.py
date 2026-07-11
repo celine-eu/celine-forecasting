@@ -59,6 +59,9 @@ class BaseTracker:
     def log_artifact(self, path: str | Path) -> None:
         pass
 
+    def log_artifacts(self, path: str | Path, artifact_path: str | None = None) -> None:
+        pass
+
     def log_device_models(self, band_models: dict) -> None:
         pass
 
@@ -159,22 +162,31 @@ class MlflowTracker(BaseTracker):
             yield self
 
     def log_params(self, params: dict[str, Any]) -> None:
+        self._refresh_token()
         flat = {k: (str(v) if isinstance(v, (dict, list, tuple)) else v) for k, v in params.items()}
         self._mlflow.log_params(flat)
 
     def log_metrics(self, metrics: dict[str, float], step: int | None = None) -> None:
+        self._refresh_token()
         clean = {k: float(v) for k, v in metrics.items() if v is not None and v == v}
         if clean:
             self._mlflow.log_metrics(clean, step=step)
 
     def set_tags(self, tags: dict[str, Any]) -> None:
+        self._refresh_token()
         self._mlflow.set_tags(tags)
 
     def log_artifact(self, path: str | Path) -> None:
+        self._refresh_token()
         self._mlflow.log_artifact(str(path))
+
+    def log_artifacts(self, path: str | Path, artifact_path: str | None = None) -> None:
+        self._refresh_token()
+        self._mlflow.log_artifacts(str(path), artifact_path=artifact_path)
 
     def log_device_models(self, band_models: dict) -> None:
         """Log a single device's band models as LightGBM artifacts."""
+        self._refresh_token()
         import joblib
 
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -194,6 +206,7 @@ class MlflowTracker(BaseTracker):
 
     def load_previous_models(self, device_id: str) -> dict | None:
         """Load the latest model bundle for a device from MLflow."""
+        self._refresh_token()
         import joblib
         import lightgbm as lgb
 
@@ -255,6 +268,7 @@ class MlflowTracker(BaseTracker):
 
     def cleanup_old_runs(self, device_id: str, retention_days: int = 7) -> int:
         """Delete runs older than retention_days for a device."""
+        self._refresh_token()
         import time
 
         client = self._mlflow.MlflowClient()
@@ -281,6 +295,7 @@ class MlflowTracker(BaseTracker):
 
     def cleanup_all(self, retention_days: int = 7) -> int:
         """Delete all runs older than retention_days across all devices."""
+        self._refresh_token()
         import time
 
         client = self._mlflow.MlflowClient()
@@ -305,6 +320,7 @@ class MlflowTracker(BaseTracker):
 
     def list_runs(self, device_id: str | None = None) -> list[dict]:
         """List runs, optionally filtered by device."""
+        self._refresh_token()
         client = self._mlflow.MlflowClient()
         experiment = client.get_experiment_by_name(self._experiment_name)
         if experiment is None:
@@ -348,6 +364,7 @@ class MlflowTracker(BaseTracker):
         Returns:
             The MLflow ``ModelInfo``, or None if there is nothing to log.
         """
+        self._refresh_token()
         if not trained_models:
             return None
         from .serving import log_forecast_model

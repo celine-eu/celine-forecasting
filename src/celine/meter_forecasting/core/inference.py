@@ -83,20 +83,21 @@ def assemble_forecast_records(
     record = {"device_id": device_id, "forecast_origin": str(forecast_origin), "forecasts": []}
     if export_fc is None or import_fc is None or export_fc.empty or import_fc.empty:
         return record
+    has_bounds = "prediction_lower" in export_fc.columns and "prediction_lower" in import_fc.columns
     for idx in range(len(export_fc)):
         export_kwh = round(float(export_fc.iloc[idx]["prediction"]), 3)
         import_kwh = round(float(import_fc.iloc[idx]["prediction"]), 3)
-        record["forecasts"].append(
-            {
-                "timestamp": str(export_fc.iloc[idx]["ts_hour"]),
-                "horizon": int(export_fc.iloc[idx]["horizon"]),
-                "grid_export_kwh": export_kwh,
-                "grid_import_kwh": import_kwh,
-                "grid_export_lower": round(float(export_fc.iloc[idx]["prediction_lower"]), 3),
-                "grid_export_upper": round(float(export_fc.iloc[idx]["prediction_upper"]), 3),
-                "grid_import_lower": round(float(import_fc.iloc[idx]["prediction_lower"]), 3),
-                "grid_import_upper": round(float(import_fc.iloc[idx]["prediction_upper"]), 3),
-                "net_exchange_kwh": round(export_kwh - import_kwh, 3),
-            }
-        )
+        entry: dict = {
+            "timestamp": str(export_fc.iloc[idx]["ts_hour"]),
+            "horizon": int(export_fc.iloc[idx]["horizon"]),
+            "grid_export_kwh": export_kwh,
+            "grid_import_kwh": import_kwh,
+            "net_exchange_kwh": round(export_kwh - import_kwh, 3),
+        }
+        if has_bounds:
+            entry["grid_export_lower"] = round(float(export_fc.iloc[idx]["prediction_lower"]), 3)
+            entry["grid_export_upper"] = round(float(export_fc.iloc[idx]["prediction_upper"]), 3)
+            entry["grid_import_lower"] = round(float(import_fc.iloc[idx]["prediction_lower"]), 3)
+            entry["grid_import_upper"] = round(float(import_fc.iloc[idx]["prediction_upper"]), 3)
+        record["forecasts"].append(entry)
     return record

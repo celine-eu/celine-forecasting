@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -468,15 +469,19 @@ def _train_device(
                             )
 
         if trained:
-            # Per-device model artifacts (incremental warm-start) are only
-            # available for backends exposing raw band models (LightGBM).
+            from .models.neural_common.persistence import NeuralFitted
+
             all_band_models = {}
             for target, fitted_model in trained.items():
                 band_models = getattr(fitted_model, "band_models", None)
-                if band_models is None:
-                    continue
-                for band_name, bundle in band_models.items():
-                    all_band_models[f"{target}/{band_name}"] = bundle
+                if band_models is not None:
+                    for band_name, bundle in band_models.items():
+                        all_band_models[f"{target}/{band_name}"] = bundle
+                elif isinstance(fitted_model, NeuralFitted):
+                    with tempfile.TemporaryDirectory() as tmpdir:
+                        target_dir = Path(tmpdir) / target
+                        fitted_model.save(target_dir)
+                        tracker.log_artifacts(tmpdir, artifact_path="models")
             if all_band_models:
                 tracker.log_device_models(all_band_models)
 
