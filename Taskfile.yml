@@ -20,28 +20,96 @@ tasks:
     cmds:
       - uv run meter-forecast validate --datasets-config {{.CONFIG}} {{.CLI_ARGS}}
 
+  # ── LightGBM (default backend) ──────────────────────────────────────────────
+
   run:
-    desc: Daily run — incremental retrain + forecast
+    desc: "Daily run — incremental retrain + forecast (lightgbm)"
     deps: [install, mlflow]
     cmds:
       - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}} {{.CLI_ARGS}}
 
   run:full:
-    desc: Full retrain from scratch
+    desc: Full retrain from scratch (lightgbm)
     deps: [install, mlflow]
     cmds:
       - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}} --full-retrain {{.CLI_ARGS}}
+
+  train:
+    desc: Full training with backtest (lightgbm)
+    deps: [install, mlflow]
+    cmds:
+      - uv run meter-forecast train --datasets-config {{.CONFIG}} --output {{.OUTPUT}} --backtest {{.CLI_ARGS}}
 
   evaluate:
     desc: Evaluate previous forecasts against actuals
     cmds:
       - uv run meter-forecast evaluate --datasets-config {{.CONFIG}} --forecasts-dir {{.OUTPUT}} {{.CLI_ARGS}}
 
-  train:
-    desc: Full training with backtest
-    deps: [install, mlflow]
+  # ── Neural backends (GPU, mutually exclusive groups) ─────────────────────────
+
+  run:ttm:
+    desc: "Train with TTM (IBM Tiny Time Mixer, fine-tunes)"
+    deps: [mlflow]
     cmds:
-      - uv run meter-forecast train --datasets-config {{.CONFIG}} --output {{.OUTPUT}} --backtest {{.CLI_ARGS}}
+      - uv sync --extra mlflow --extra db --group ttm
+      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}} --model ttm {{.CLI_ARGS}}
+
+  run:chronos-bolt:
+    desc: "Train with Chronos-Bolt (Amazon, zero-shot univariate)"
+    deps: [mlflow]
+    cmds:
+      - uv sync --extra mlflow --extra db --group chronos
+      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}} --model chronos_bolt {{.CLI_ARGS}}
+
+  run:chronos2:
+    desc: "Train with Chronos-2 (Amazon, zero-shot with covariates)"
+    deps: [mlflow]
+    cmds:
+      - uv sync --extra mlflow --extra db --group chronos
+      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}} --model chronos2 {{.CLI_ARGS}}
+
+  run:timesfm:
+    desc: "Train with TimesFM 2.5 (Google, zero-shot univariate)"
+    deps: [mlflow]
+    cmds:
+      - uv sync --extra mlflow --extra db --group timesfm25
+      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}} --model timesfm25 {{.CLI_ARGS}}
+
+  run:moirai:
+    desc: "Train with Moirai (Salesforce, zero-shot with covariates)"
+    deps: [mlflow]
+    cmds:
+      - uv sync --extra mlflow --extra db --group moirai
+      - uv run meter-forecast run --datasets-config {{.CONFIG}} --output {{.OUTPUT}} --model moirai {{.CLI_ARGS}}
+
+  # ── Smoke tests (verify backend loads on GPU) ───────────────────────────────
+
+  smoke:ttm:
+    desc: Smoke test TTM backend
+    cmds:
+      - uv sync --group ttm
+      - uv run python -m celine.meter_forecasting.models.ttm.smoke_ttm
+
+  smoke:chronos:
+    desc: Smoke test Chronos-Bolt + Chronos-2 backends
+    cmds:
+      - uv sync --group chronos
+      - uv run python -m celine.meter_forecasting.models.chronos_bolt.smoke_chronos_bolt
+      - uv run python -m celine.meter_forecasting.models.chronos2.smoke_chronos2
+
+  smoke:timesfm:
+    desc: Smoke test TimesFM 2.5 backend
+    cmds:
+      - uv sync --group timesfm25
+      - uv run python -m celine.meter_forecasting.models.timesfm25.smoke_timesfm25
+
+  smoke:moirai:
+    desc: Smoke test Moirai backend
+    cmds:
+      - uv sync --group moirai
+      - uv run python -m celine.meter_forecasting.models.moirai.smoke_moirai
+
+  # ── Infrastructure ──────────────────────────────────────────────────────────
 
   cleanup:
     desc: Clean up old MLflow runs (default 7 days)

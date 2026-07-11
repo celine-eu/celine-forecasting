@@ -1,15 +1,7 @@
-"""Runnable smoke test for the TTM backend — run in a Python 3.12 [ttm] venv:
+"""Runnable smoke test for the TTM backend:
 
-    python -m celine.meter_forecasting.models.ttm.smoke_ttm
-
-Set up the venv first (the deps conflict with other backends, so use a dedicated
-one)::
-
-    uv venv --python 3.12 .venv-ttm && source .venv-ttm/bin/activate
-    uv pip install -e . -r src/celine/meter_forecasting/models/ttm/requirements.txt
-
-Fits TTM on a tiny synthetic device frame and prints a full-horizon forecast.
-Exits cleanly with a message if ``tsfm_public`` is not installed.
+    uv sync --group ttm
+    uv run python -m celine.meter_forecasting.models.ttm.smoke_ttm
 """
 
 from __future__ import annotations
@@ -20,10 +12,7 @@ import importlib.util
 def main() -> int:
     """Fit + predict TTM on a synthetic frame; print the forecast. Returns 0."""
     if importlib.util.find_spec("tsfm_public") is None:
-        print(
-            "tsfm_public not installed — create a Python 3.12 venv and install "
-            "src/celine/meter_forecasting/models/ttm/requirements.txt"
-        )
+        print("tsfm_public not installed — run: uv sync --group ttm")
         return 0
     import numpy as np
     import pandas as pd

@@ -1,11 +1,7 @@
-"""Runnable smoke test for the TimesFM25 backend — run in a Python 3.12 venv:
+"""Runnable smoke test for the TimesFM25 backend:
 
-    python -m celine.meter_forecasting.models.timesfm25.smoke_timesfm25
-
-Install the backend first (dedicated venv; deps conflict with other backends)::
-
-    uv venv --python 3.12 .venv-timesfm25 && source .venv-timesfm25/bin/activate
-    uv pip install -e . -r src/celine/meter_forecasting/models/timesfm25/requirements.txt
+    uv sync --group timesfm25
+    uv run python -m celine.meter_forecasting.models.timesfm25.smoke_timesfm25
 """
 
 from __future__ import annotations
@@ -16,10 +12,7 @@ import importlib.util
 def main() -> int:
     """Fit + predict TimesFM25 on a synthetic frame; print the forecast. Returns 0."""
     if importlib.util.find_spec("timesfm") is None:
-        print(
-            "timesfm not installed — create a Python 3.12 venv and install "
-            "src/celine/meter_forecasting/models/timesfm25/requirements.txt"
-        )
+        print("timesfm not installed — run: uv sync --group timesfm25")
         return 0
     import numpy as np
     import pandas as pd

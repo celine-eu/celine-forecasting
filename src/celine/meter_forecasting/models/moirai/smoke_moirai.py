@@ -1,11 +1,7 @@
-"""Runnable smoke test for the Moirai backend — run in a Python 3.12 venv:
+"""Runnable smoke test for the Moirai backend:
 
-    python -m celine.meter_forecasting.models.moirai.smoke_moirai
-
-Install the backend first (dedicated venv; deps conflict with other backends)::
-
-    uv venv --python 3.12 .venv-moirai && source .venv-moirai/bin/activate
-    uv pip install -e . -r src/celine/meter_forecasting/models/moirai/requirements.txt
+    uv sync --group moirai
+    uv run python -m celine.meter_forecasting.models.moirai.smoke_moirai
 """
 
 from __future__ import annotations
@@ -16,10 +12,7 @@ import importlib.util
 def main() -> int:
     """Fit + predict Moirai on a synthetic frame; print the forecast. Returns 0."""
     if importlib.util.find_spec("uni2ts") is None:
-        print(
-            "uni2ts not installed — create a Python 3.12 venv and install "
-            "src/celine/meter_forecasting/models/moirai/requirements.txt"
-        )
+        print("uni2ts not installed — run: uv sync --group moirai")
         return 0
     import numpy as np
     import pandas as pd

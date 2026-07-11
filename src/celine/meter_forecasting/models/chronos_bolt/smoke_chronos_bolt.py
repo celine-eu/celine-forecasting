@@ -1,11 +1,7 @@
-"""Runnable smoke test for the ChronosBolt backend — run in a Python 3.12 venv:
+"""Runnable smoke test for the ChronosBolt backend:
 
-    python -m celine.meter_forecasting.models.chronos_bolt.smoke_chronos_bolt
-
-Install the backend first (dedicated venv; deps conflict with other backends)::
-
-    uv venv --python 3.12 .venv-chronos_bolt && source .venv-chronos_bolt/bin/activate
-    uv pip install -e . -r src/celine/meter_forecasting/models/chronos_bolt/requirements.txt
+    uv sync --group chronos
+    uv run python -m celine.meter_forecasting.models.chronos_bolt.smoke_chronos_bolt
 """
 
 from __future__ import annotations
@@ -16,10 +12,7 @@ import importlib.util
 def main() -> int:
     """Fit + predict ChronosBolt on a synthetic frame; print the forecast. Returns 0."""
     if importlib.util.find_spec("chronos") is None:
-        print(
-            "chronos not installed — create a Python 3.12 venv and install "
-            "src/celine/meter_forecasting/models/chronos_bolt/requirements.txt"
-        )
+        print("chronos not installed — run: uv sync --group chronos")
         return 0
     import numpy as np
     import pandas as pd

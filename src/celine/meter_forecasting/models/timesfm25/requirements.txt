@@ -1,5 +1,0 @@
-# Pinned to the version the TimesFM25 seam was ported against (API drifts).
-# Install a CUDA torch wheel first (see AGENTS.md), then this file.
-timesfm==2.0.1
-torch
-safetensors

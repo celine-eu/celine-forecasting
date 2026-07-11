@@ -1,6 +1,0 @@
-# Pinned to the versions the ChronosBolt seam was ported against (API drifts).
-# Install a CUDA torch wheel first (see AGENTS.md), then this file.
-chronos-forecasting==2.2.2
-torch
-transformers
-accelerate

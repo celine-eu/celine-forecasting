@@ -1,8 +1,0 @@
-# Pinned to the versions the Moirai seam was ported against (API drifts).
-# Install a CUDA torch wheel first (see AGENTS.md), then this file. NOTE: the
-# reference forced torch past uni2ts's declared pin (torch<2.5) to get CUDA
-# wheels; imports + inference verified OK on the GPU box.
-uni2ts==2.0.0
-torch
-gluonts==0.14.4
-lightning

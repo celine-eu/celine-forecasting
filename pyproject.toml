@@ -3,7 +3,7 @@ name = "celine-meter-forecasting"
 version = "0.1.0"
 description = "Open-source 48h energy forecasting for smart meters (per-device LightGBM + CQR intervals)"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.12,<3.13"
 license = "Apache-2.0"
 authors = [{ name = "CELINE / SpindoxLabs" }]
 keywords = ["energy", "forecasting", "smart-meter", "lightgbm", "mlflow", "time-series"]
@@ -22,15 +22,19 @@ dependencies = [
 [project.optional-dependencies]
 mlflow = ["mlflow>=2.10.0", "boto3>=1.28.0"]
 db = ["sqlalchemy>=2.0.0", "psycopg2-binary>=2.9.0"]
-# Neural backends are NOT pyproject extras: their deps conflict with each other
-# and have no wheels for the dev Python (3.13), which breaks uv's universal
-# resolution. Each backend ships its own models/<backend>/requirements.txt to be
-# installed into a SEPARATE Python 3.12 venv. See models/ttm/requirements.txt.
 dev = [
     "pytest>=8.0.0",
     "ruff>=0.5.0",
     "mypy>=1.8.0",
 ]
+
+# Neural backends: use `uv sync --group <backend>`.
+# Groups resolve independently so conflicting deps don't clash.
+[dependency-groups]
+ttm = ["torch", "transformers", "granite-tsfm==0.3.6"]
+chronos = ["torch", "transformers", "accelerate", "chronos-forecasting==2.2.2"]
+timesfm25 = ["torch", "safetensors", "timesfm==2.0.1"]
+moirai = ["torch", "lightning", "gluonts==0.14.4", "uni2ts==2.0.0"]
 
 [project.scripts]
 meter-forecast = "celine.meter_forecasting.cli:main"
@@ -38,6 +42,17 @@ meter-forecast = "celine.meter_forecasting.cli:main"
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
+
+[tool.uv]
+conflicts = [
+    [
+        { group = "ttm" },
+        { group = "chronos" },
+        { group = "timesfm25" },
+        { group = "moirai" },
+    ],
+]
+default-groups = []
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/celine"]

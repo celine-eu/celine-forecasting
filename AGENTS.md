@@ -20,13 +20,12 @@
     `get_forecaster(model)`.
 
   **Neural backends** (TTM, Chronos-Bolt, Chronos-2, TimesFM 2.5, Moirai) have
-  mutually conflicting deps and no wheels for the dev Python (3.13), so they are
-  NOT pyproject extras: each ships `models/<backend>/requirements.txt`, installed
-  into a **separate Python 3.12 venv** per backend. `core/` and
-  `models/neural_common/` stay torch-free; the torch-touching code is
-  dependency-guarded (the registry raises an actionable error when a backend's lib
-  is absent) and verified with
-  `python -m celine.meter_forecasting.models.<backend>.smoke_<backend>` in that venv.
+  mutually conflicting deps and are managed as **uv dependency groups** (resolved
+  independently). Install one at a time with `uv sync --group <backend>`.
+  `core/` and `models/neural_common/` stay torch-free; the torch-touching code
+  is dependency-guarded (the registry raises an actionable error when a backend's
+  lib is absent) and verified with
+  `uv run --group <backend> python -m celine.meter_forecasting.models.<backend>.smoke_<backend>`.
 
   Backend status (torch seams are ported from the IBM `energy_forecasting`
   reference and run on the GPU box — they cannot execute in the torch-free dev env):
@@ -64,12 +63,16 @@
 ## Running
 
 ```bash
-uv sync --extra mlflow --extra dev
+uv sync --extra mlflow --extra dev --extra db
 uv run pytest
 uv run meter-forecast --help
 
-# pick a backend / scope (defaults shown)
-uv run meter-forecast train --meters data.csv --model lightgbm --scope per_device
+# LightGBM (default backend)
+uv run meter-forecast run --datasets-config examples/datasets.yaml --output out/
+
+# Neural backend (install group first, then run)
+uv sync --group ttm
+uv run meter-forecast run --datasets-config examples/datasets.yaml --output out/ --model ttm
 ```
 
 `bias_correction.enabled` in the config adds a validation-derived
