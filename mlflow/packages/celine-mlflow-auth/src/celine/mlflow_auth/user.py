@@ -48,7 +48,9 @@ def resolve_mlflow_user(store, claims: dict) -> str | None:
     else:
         result = resolve_is_admin(claims)
         if result is None:
-            logger.warning("User %s has no KC groups — access denied", username)
+            from celine.mlflow_auth.groups import _is_service_account
+            kind = "scopes" if _is_service_account(claims) else "groups"
+            logger.warning("User %s has no matching KC %s — access denied", username, kind)
             return None
         is_admin = result
 

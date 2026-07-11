@@ -1,6 +1,6 @@
 import pytest
 
-from celine.mlflow_auth.groups import _group_name, resolve_is_admin
+from celine.mlflow_auth.groups import _group_name, _is_service_account, resolve_is_admin
 
 
 class TestGroupName:
@@ -93,4 +93,49 @@ class TestOrgOnlyDenied:
             "groups": ["/admins"],
             "organization": {"example_dso": {"groups": ["viewers"]}},
         }
+        assert resolve_is_admin(claims) is True
+
+
+class TestServiceAccountDetection:
+    def test_client_id_present(self):
+        assert _is_service_account({"client_id": "svc-forecast"}) is True
+
+    def test_no_username_no_email(self):
+        assert _is_service_account({"azp": "svc-forecast", "scope": "mlflow.admin"}) is True
+
+    def test_user_with_username(self):
+        assert _is_service_account({"preferred_username": "alice"}) is False
+
+    def test_user_with_email(self):
+        assert _is_service_account({"email": "alice@example.com"}) is False
+
+
+class TestServiceAccountScopes:
+    def _svc_claims(self, scope: str) -> dict:
+        return {"azp": "svc-forecast", "scope": scope}
+
+    def test_admin_scope(self):
+        assert resolve_is_admin(self._svc_claims("mlflow.admin")) is True
+
+    def test_read_scope(self):
+        assert resolve_is_admin(self._svc_claims("mlflow.read")) is False
+
+    def test_admin_and_read(self):
+        assert resolve_is_admin(self._svc_claims("mlflow.admin mlflow.read")) is True
+
+    def test_no_mlflow_scope_denied(self):
+        assert resolve_is_admin(self._svc_claims("dataset.query")) is None
+
+    def test_empty_scope_denied(self):
+        assert resolve_is_admin(self._svc_claims("")) is None
+
+    def test_no_scope_claim_denied(self):
+        assert resolve_is_admin({"azp": "svc-forecast"}) is None
+
+    def test_token_with_groups_treated_as_user(self):
+        claims = {"azp": "svc-forecast", "scope": "mlflow.read", "groups": ["/admins"]}
+        assert resolve_is_admin(claims) is True  # groups present → user path → admin group wins
+
+    def test_client_id_claim_uses_scope_path(self):
+        claims = {"client_id": "svc-forecast", "scope": "mlflow.admin"}
         assert resolve_is_admin(claims) is True
