@@ -9,9 +9,9 @@ See ``docs/data_contract.md`` for the human-readable version with examples.
 
 Unit convention
 ---------------
-``consumption_kw`` and ``production_kw`` hold **energy in kWh accumulated over
-each 15-minute interval** (the ``_kw`` suffix is legacy and misleading). Hourly
-aggregation therefore *sums* the four quarters of an hour to obtain kWh/hour.
+``consumption_kwh`` and ``production_kwh`` hold **energy in kWh accumulated over
+each 15-minute interval**. Hourly aggregation *sums* the four quarters of an
+hour to obtain kWh/hour.
 """
 
 from __future__ import annotations
@@ -27,9 +27,9 @@ COL_DEVICE_ID = "device_id"
 #: Reading timestamp. MUST be timezone-aware UTC, aligned to a 15-minute grid.
 COL_TIMESTAMP = "ts"
 #: Energy imported from the grid (consumption) in kWh per 15-minute interval.
-COL_CONSUMPTION = "consumption_kw"
+COL_CONSUMPTION = "consumption_kwh"
 #: Energy exported to the grid (PV injection) in kWh per 15-minute interval.
-COL_PRODUCTION = "production_kw"
+COL_PRODUCTION = "production_kwh"
 
 
 @dataclass(frozen=True)

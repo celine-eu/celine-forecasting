@@ -62,8 +62,8 @@ def generate() -> None:
                 {
                     "device_id": device,
                     "ts": ts,
-                    "consumption_kw": np.round(cons, 4),
-                    "production_kw": np.round(prod, 4),
+                    "consumption_kwh": np.round(cons, 4),
+                    "production_kwh": np.round(prod, 4),
                 }
             )
         )

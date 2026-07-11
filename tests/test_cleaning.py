@@ -19,8 +19,8 @@ def test_hourly_aggregation_sums_quarters(config):
         {
             "device_id": "d",
             "ts": ts,
-            "consumption_kw": [0.25, 0.25, 0.25, 0.25],
-            "production_kw": 0.0,
+            "consumption_kwh": [0.25, 0.25, 0.25, 0.25],
+            "production_kwh": 0.0,
         }
     )
     hourly = aggregate_to_hourly(df, config)
@@ -31,7 +31,7 @@ def test_hourly_aggregation_sums_quarters(config):
 def test_partial_hour_scaled(config):
     ts = pd.date_range("2025-02-01 00:00", periods=3, freq="15min", tz="UTC")  # 3 of 4 quarters
     df = pd.DataFrame(
-        {"device_id": "d", "ts": ts, "consumption_kw": [0.25, 0.25, 0.25], "production_kw": 0.0}
+        {"device_id": "d", "ts": ts, "consumption_kwh": [0.25, 0.25, 0.25], "production_kwh": 0.0}
     )
     hourly = aggregate_to_hourly(df, config)
     assert hourly["partial_hour"].iloc[0]

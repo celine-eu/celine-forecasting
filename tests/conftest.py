@@ -36,8 +36,8 @@ def raw_meters() -> pd.DataFrame:
                 {
                     "device_id": device,
                     "ts": ts,
-                    "consumption_kw": np.clip(cons, 0, None).round(4),
-                    "production_kw": np.clip(prod, 0, None).round(4),
+                    "consumption_kwh": np.clip(cons, 0, None).round(4),
+                    "production_kwh": np.clip(prod, 0, None).round(4),
                 }
             )
         )
@@ -79,7 +79,7 @@ def tiny_meters() -> pd.DataFrame:
         {
             "device_id": "dev-tiny",
             "ts": ts,
-            "consumption_kw": np.full(len(ts), 0.2),
-            "production_kw": np.zeros(len(ts)),
+            "consumption_kwh": np.full(len(ts), 0.2),
+            "production_kwh": np.zeros(len(ts)),
         }
     )

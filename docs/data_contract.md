@@ -14,8 +14,8 @@ One row per device per 15-minute interval.
 |------------------|--------------------------|-------------------------|-------|
 | `device_id`      | string                   | —                       | Any stable id (serial, anonymised key). |
 | `ts`             | datetime, **tz-aware UTC** | —                     | Aligned to a 15-min grid. |
-| `consumption_kw` | float                    | **kWh per 15-min**      | Energy imported from the grid. |
-| `production_kw`  | float                    | **kWh per 15-min**      | Energy exported to the grid (PV). |
+| `consumption_kwh` | float                    | **kWh per 15-min**      | Energy imported from the grid. |
+| `production_kwh`  | float                    | **kWh per 15-min**      | Energy exported to the grid (PV). |
 
 ### Unit caveat
 
@@ -30,8 +30,8 @@ meter-forecast run --meters my_meters.csv --output out/
 ```
 
 `load_meters` runs `normalize_meters` by default, which auto-maps common column
-names (e.g. `meter_id` → `device_id`, `import` → `consumption_kw`, `prelievo` →
-`consumption_kw`) and coerces naive timestamps to UTC via `--assume-tz`.
+names (e.g. `meter_id` → `device_id`, `import` → `consumption_kwh`, `prelievo` →
+`consumption_kwh`) and coerces naive timestamps to UTC via `--assume-tz`.
 
 ### Loading from a database
 
@@ -45,8 +45,8 @@ datasets:
     - table: silver.other_source
       columns:
         sensor_ref: device_id
-        kwh_in: consumption_kw
-        kwh_out: production_kw
+        kwh_in: consumption_kwh
+        kwh_out: production_kwh
       assume_tz: Europe/Rome
 ```
 

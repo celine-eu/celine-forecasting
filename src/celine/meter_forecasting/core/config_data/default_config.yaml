@@ -4,9 +4,9 @@
 # Every tunable used by the pipeline lives here. Copy this file, edit it, and
 # pass `--config my_config.yaml` (CLI) or `load_config("my_config.yaml")` (API).
 #
-# Units note: `consumption_kw` / `production_kw` columns hold ENERGY in kWh per
-# 15-minute interval (the `_kw` suffix is legacy). After hourly aggregation all
-# quantities are kWh per hour. See docs/data_contract.md.
+# Units note: `consumption_kwh` / `production_kwh` columns hold ENERGY in kWh
+# per 15-minute interval. After hourly aggregation all quantities are kWh per
+# hour. See docs/data_contract.md.
 # =============================================================================
 
 random_seed: 42

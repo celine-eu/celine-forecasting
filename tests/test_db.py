@@ -14,14 +14,14 @@ import pytest
 
 @pytest.fixture
 def meter_df():
-    """DataFrame matching the meter contract (device_id, ts, consumption_kw, production_kw)."""
+    """DataFrame matching the meter contract (device_id, ts, consumption_kwh, production_kwh)."""
     ts = pd.date_range("2025-03-01", periods=96, freq="15min", tz="UTC")
     return pd.DataFrame(
         {
             "device_id": "dev-A",
             "ts": ts,
-            "consumption_kw": np.full(96, 0.2),
-            "production_kw": np.full(96, 0.1),
+            "consumption_kwh": np.full(96, 0.2),
+            "production_kwh": np.full(96, 0.1),
         }
     )
 
@@ -76,14 +76,14 @@ class TestLoadMetersFromDb:
         from celine.meter_forecasting.core.db import load_meters_from_db
 
         df2 = meter_df.copy()
-        df2["consumption_kw"] = 0.999
+        df2["consumption_kwh"] = 0.999
 
         config = [{"table": "silver.table_a"}, {"table": "silver.table_b"}]
         with patch("pandas.read_sql", side_effect=[meter_df, df2]):
             df = load_meters_from_db(config, engine=mock_engine)
 
         assert len(df) == 96
-        assert (df["consumption_kw"] == 0.2).all()
+        assert (df["consumption_kwh"] == 0.2).all()
 
     def test_column_mapping(self, mapped_df, mock_engine):
         from celine.meter_forecasting.core.db import load_meters_from_db
@@ -93,8 +93,8 @@ class TestLoadMetersFromDb:
                 "table": "silver.other",
                 "columns": {
                     "sensor_ref": "device_id",
-                    "kwh_in": "consumption_kw",
-                    "kwh_out": "production_kw",
+                    "kwh_in": "consumption_kwh",
+                    "kwh_out": "production_kwh",
                 },
                 "assume_tz": "UTC",
             }
@@ -103,7 +103,7 @@ class TestLoadMetersFromDb:
             df = load_meters_from_db(config, engine=mock_engine)
 
         assert "device_id" in df.columns
-        assert "consumption_kw" in df.columns
+        assert "consumption_kwh" in df.columns
         assert (df["device_id"] == "dev-B").all()
 
     def test_empty_sources_raises(self, mock_engine):

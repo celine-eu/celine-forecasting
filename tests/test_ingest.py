@@ -19,7 +19,7 @@ def test_aliases_renamed_to_contract():
         }
     )
     out = normalize_meters(raw)
-    assert {"device_id", "ts", "consumption_kw", "production_kw"} <= set(out.columns)
+    assert {"device_id", "ts", "consumption_kwh", "production_kwh"} <= set(out.columns)
     # And the normalised frame satisfies the contract.
     validate_raw_schema(out, kind="meter")
 
@@ -29,8 +29,8 @@ def test_naive_timestamp_coerced_to_utc():
         {
             "device_id": ["m1"],
             "ts": ["2025-01-01 00:00"],
-            "consumption_kw": [0.1],
-            "production_kw": [0.0],
+            "consumption_kwh": [0.1],
+            "production_kwh": [0.0],
         }
     )
     out = normalize_meters(raw, assume_tz="UTC")
@@ -42,8 +42,8 @@ def test_local_tz_converted_to_utc():
         {
             "device_id": ["m1"],
             "ts": ["2025-01-01 01:00"],  # 01:00 Europe/Rome == 00:00 UTC (winter)
-            "consumption_kw": [0.1],
-            "production_kw": [0.0],
+            "consumption_kwh": [0.1],
+            "production_kwh": [0.0],
         }
     )
     out = normalize_meters(raw, assume_tz="Europe/Rome")
@@ -55,13 +55,13 @@ def test_exact_contract_names_not_clobbered():
         {
             "device_id": ["m1"],
             "ts": pd.to_datetime(["2025-01-01 00:00"], utc=True),
-            "consumption_kw": [0.1],
-            "production_kw": [0.0],
-            "import": [9.9],  # a stray alias column must NOT overwrite consumption_kw
+            "consumption_kwh": [0.1],
+            "production_kwh": [0.0],
+            "import": [9.9],  # a stray alias column must NOT overwrite consumption_kwh
         }
     )
     out = normalize_meters(raw)
-    assert out["consumption_kw"].iloc[0] == 0.1
+    assert out["consumption_kwh"].iloc[0] == 0.1
 
 
 def test_explicit_column_map_wins():
@@ -74,9 +74,9 @@ def test_explicit_column_map_wins():
         }
     )
     out = normalize_meters(
-        raw, column_map={"when": "ts", "in": "consumption_kw", "out": "production_kw"}
+        raw, column_map={"when": "ts", "in": "consumption_kwh", "out": "production_kwh"}
     )
-    assert {"device_id", "ts", "consumption_kw", "production_kw"} <= set(out.columns)
+    assert {"device_id", "ts", "consumption_kwh", "production_kwh"} <= set(out.columns)
 
 
 def test_unmappable_columns_still_raise():

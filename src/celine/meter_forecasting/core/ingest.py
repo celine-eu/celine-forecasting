@@ -29,12 +29,14 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
         "interval_start", "data",
     ),
     COL_CONSUMPTION: (
-        "consumption_kw", "consumption", "cons", "import", "grid_import", "kwh_in",
-        "energy_in", "active_energy_import", "prelievo", "consumo",
+        "consumption_kwh", "consumption_kw", "consumption", "cons", "import",
+        "grid_import", "kwh_in", "energy_in", "active_energy_import",
+        "prelievo", "consumo",
     ),
     COL_PRODUCTION: (
-        "production_kw", "production", "prod", "export", "grid_export", "kwh_out",
-        "energy_out", "active_energy_export", "immissione", "produzione",
+        "production_kwh", "production_kw", "production", "prod", "export",
+        "grid_export", "kwh_out", "energy_out", "active_energy_export",
+        "immissione", "produzione",
     ),
 }
 

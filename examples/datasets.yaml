@@ -17,23 +17,23 @@ datasets:
   # Each entry declares a table and optionally a column mapping + timezone.
   meters:
     # Source whose columns already match the contract (device_id, ts,
-    # consumption_kw, production_kw) — no mapping needed.
-    - table: silver.meters_data_normalized
+    # consumption_kwh, production_kwh) — no mapping needed.
+    - table: ds_dev_silver.meters_data_normalized
 
     # Source with different column names — map them to the contract.
     # `columns` is {source_column: contract_column}.
     # `assume_tz` localises naive timestamps before converting to UTC.
     #
-    # - table: silver.my_other_table
+    # - table: ds_dev_silver.my_other_table
     #   columns:
     #     sensor_ref: device_id
-    #     kwh_imported: consumption_kw
-    #     kwh_exported: production_kw
+    #     kwh_imported: consumption_kwh
+    #     kwh_exported: production_kwh
     #   assume_tz: Europe/Rome
 
   # Weather sources — ordered by priority (first wins on duplicate datetime).
   # Same pattern as meters: list of tables, merged and deduplicated.
   # Columns should include `datetime` and any subset of the weather contract.
   weather:
-    - table: silver.copernicus_weather_features
-    # - table: gold.om_weather_features_meters
+    - table: ds_dev_silver.copernicus_weather_features
+    # - table: ds_dev_gold.om_weather_features_meters

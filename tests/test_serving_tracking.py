@@ -25,7 +25,7 @@ def test_split_input_bare_dataframe_is_weather_free():
     from celine.meter_forecasting.core.serving import _split_input
 
     df = pd.DataFrame(
-        {"device_id": ["d"], "ts": [1], "consumption_kw": [0.1], "production_kw": [0.0]}
+        {"device_id": ["d"], "ts": [1], "consumption_kwh": [0.1], "production_kwh": [0.0]}
     )
     meters, weather = _split_input(df)
 

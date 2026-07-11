@@ -66,7 +66,7 @@ def _io_signature() -> ModelSignature:
     """Build the model's **output** signature (the per-(device, horizon) table).
 
     Output-only by design. The input is the meter data contract (``device_id``,
-    ``ts``, ``consumption_kw``, ``production_kw``) — optionally accompanied by a
+    ``ts``, ``consumption_kwh``, ``production_kwh``) — optionally accompanied by a
     weather frame for weather-trained models, passed as
     ``predict({"meters": ..., "weather": ...})``. MLflow's split-input schema
     enforcement rejects timezone-aware datetime columns (``ts`` is tz-aware UTC)

@@ -64,8 +64,8 @@ def test_log_load_predict_roundtrip(model_name: str, tmp_path) -> None:
         {
             "device_id": "dev-1",
             "ts": pd.date_range("2026-01-01", periods=96 * 60, freq="15min", tz="UTC"),
-            "consumption_kw": 0.5,
-            "production_kw": 0.0,
+            "consumption_kwh": 0.5,
+            "production_kwh": 0.0,
         }
     )
     out = loaded.predict(meters)

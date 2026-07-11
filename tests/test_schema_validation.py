@@ -16,7 +16,7 @@ from celine.meter_forecasting.core.validation import (
 
 
 def test_contract_columns():
-    assert METER_CONTRACT.required_columns == ("device_id", "ts", "consumption_kw", "production_kw")
+    assert METER_CONTRACT.required_columns == ("device_id", "ts", "consumption_kwh", "production_kwh")
     assert WEATHER_CONTRACT.timestamp_column == "datetime"
 
 
@@ -25,8 +25,8 @@ def test_valid_meter_schema_passes(raw_meters):
 
 
 def test_missing_column_raises(raw_meters):
-    bad = raw_meters.drop(columns=["production_kw"])
-    with pytest.raises(SchemaError, match="production_kw"):
+    bad = raw_meters.drop(columns=["production_kwh"])
+    with pytest.raises(SchemaError, match="production_kwh"):
         validate_raw_schema(bad, kind="meter")
 
 
@@ -39,7 +39,7 @@ def test_naive_timestamp_raises(raw_meters):
 
 def test_non_numeric_value_raises(raw_meters):
     bad = raw_meters.copy()
-    bad["consumption_kw"] = "x"
+    bad["consumption_kwh"] = "x"
     with pytest.raises(SchemaError, match="numeric"):
         validate_raw_schema(bad, kind="meter")
 
