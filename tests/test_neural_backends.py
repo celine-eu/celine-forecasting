@@ -13,9 +13,9 @@ from celine.meter_forecasting.core.forecaster import get_forecaster, list_backen
 # (backend name, importable library, HF checkpoint id)
 BACKENDS = [
     ("chronos2", "chronos", "amazon/chronos-2"),
-    ("chronos_bolt", "chronos", "amazon/chronos-bolt-base"),
+    ("chronos_bolt", "chronos", "amazon/chronos-bolt-small"),
     ("timesfm25", "timesfm", "google/timesfm-2.5-200m-pytorch"),
-    ("moirai", "uni2ts", "Salesforce/moirai-1.0-R-base"),
+    ("moirai", "uni2ts", "Salesforce/moirai-1.0-R-small"),
 ]
 
 
@@ -27,7 +27,7 @@ def test_backend_registered(name: str, lib: str, model_id: str) -> None:
 @pytest.mark.parametrize("name,lib,model_id", BACKENDS)
 def test_config_model_id(name: str, lib: str, model_id: str) -> None:
     cfg = importlib.import_module(f"celine.meter_forecasting.models.{name}.config")
-    assert cfg.MODEL_ID == model_id
+    assert cfg.DEFAULT_MODEL_ID == model_id
 
 
 @pytest.mark.parametrize("name,lib,model_id", BACKENDS)

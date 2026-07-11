@@ -3,22 +3,14 @@
 from __future__ import annotations
 
 from ...core.config import ForecastConfig
+from ..neural_common.settings import backend_settings
 
-TTM_MODEL_ID = "ibm-granite/granite-timeseries-ttm-r2"
+DEFAULT_MODEL_ID = "ibm-granite/granite-timeseries-ttm-r2"
 
 
 def ttm_settings(config: ForecastConfig) -> dict:
-    """Resolve TTM settings from ``backends.ttm`` with defaults.
-
-    Args:
-        config: Pipeline configuration.
-
-    Returns:
-        Dict with ``finetune: bool``, ``context_length: int``, ``covariates: bool``.
-    """
-    section = config.raw.get("backends", {}).get("ttm", {})
-    return {
-        "finetune": bool(section.get("finetune", True)),
-        "context_length": int(section.get("context_length", 512)),
-        "covariates": bool(section.get("covariates", True)),
-    }
+    """Resolve TTM settings from ``backends.ttm``."""
+    return backend_settings(
+        config, "ttm",
+        model_id=DEFAULT_MODEL_ID, context_length=512, finetune=True, covariates=True,
+    )

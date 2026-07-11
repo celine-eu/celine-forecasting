@@ -23,7 +23,7 @@ from ..neural_common.covariates import resolve_covariate_columns
 from ..neural_common.persistence import NeuralFitted
 from ..neural_common.predict import predict_forecast_frame
 from ..neural_common.transform import LogStandardizeTransform
-from .config import MODEL_ID, settings
+from .config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +37,7 @@ _FREQ = "h"
 _AVAILABLE = importlib.util.find_spec("uni2ts") is not None
 
 
-def _make_predictor(n_cov: int, context_length: int, horizon: int) -> object:
+def _make_predictor(n_cov: int, context_length: int, horizon: int, model_id: str) -> object:
     """Build a GluonTS predictor wrapping zero-shot ``MoiraiForecast``.
 
     Faithful port of ``moirai/runner.build_predictor`` for the hourly geometry.
@@ -46,6 +46,7 @@ def _make_predictor(n_cov: int, context_length: int, horizon: int) -> object:
         n_cov: Number of known-future covariates (0 for univariate).
         context_length: Effective context length.
         horizon: Forecast horizon in steps.
+        model_id: HuggingFace model ID.
 
     Returns:
         A GluonTS ``PyTorchPredictor``.
@@ -54,7 +55,7 @@ def _make_predictor(n_cov: int, context_length: int, horizon: int) -> object:
     from uni2ts.model.moirai import MoiraiForecast, MoiraiModule
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    module = MoiraiModule.from_pretrained(MODEL_ID)
+    module = MoiraiModule.from_pretrained(model_id)
     model = MoiraiForecast(
         module=module,
         prediction_length=horizon,
@@ -77,11 +78,13 @@ class MoiraiFitted(NeuralFitted):
         transform: LogStandardizeTransform,
         covariate_cols: list[str],
         context_length: int,
+        model_id: str = "",
     ) -> None:
         self._model = model
         self._transform = transform
         self._covariate_cols = covariate_cols
         self._context_length = context_length
+        self._model_id = model_id
 
     def predict(
         self,
@@ -164,13 +167,14 @@ class MoiraiFitted(NeuralFitted):
         return self._transform.inverse(median)
 
     def _save_model(self, directory: Path) -> None:
-        # Zero-shot uses fixed weights; the predictor is rebuilt from MODEL_ID on
-        # load using the geometry persisted in meta.json.
         (directory / "model").mkdir(parents=True, exist_ok=True)
 
     def _load_model(self, directory: Path) -> None:
+        from .config import DEFAULT_MODEL_ID
+
         self._model = _make_predictor(
-            len(self._covariate_cols), self._context_length, self._prediction_length
+            len(self._covariate_cols), self._context_length, self._prediction_length,
+            model_id=self._model_id or DEFAULT_MODEL_ID,
         )
 
     def _state_meta(self) -> dict:
@@ -180,6 +184,7 @@ class MoiraiFitted(NeuralFitted):
             "covariate_cols": self._covariate_cols,
             "context_length": self._context_length,
             "prediction_length": int(self._model.prediction_length),  # type: ignore[attr-defined]
+            "model_id": self._model_id,
         }
 
     def _restore_meta(self, meta: dict) -> None:
@@ -189,6 +194,7 @@ class MoiraiFitted(NeuralFitted):
         self._covariate_cols = meta["covariate_cols"]
         self._context_length = meta["context_length"]
         self._prediction_length = meta["prediction_length"]
+        self._model_id = meta.get("model_id", "")
 
 
 class MoiraiForecaster:
@@ -227,7 +233,7 @@ class MoiraiForecaster:
             return None
         transform = LogStandardizeTransform().fit(train[target].to_numpy(dtype=float))
         model = _build_moirai(train, target, covariate_cols, cfg, scope, config)
-        return MoiraiFitted(model, transform, covariate_cols, cfg["context_length"])
+        return MoiraiFitted(model, transform, covariate_cols, cfg["context_length"], cfg["model_id"])
 
 
 def _build_moirai(
@@ -262,7 +268,8 @@ def _build_moirai(
             "zero-shot only); using the zero-shot predictor."
         )
     return _make_predictor(
-        len(covariate_cols), int(cfg["context_length"]), int(config.forecast_horizon)
+        len(covariate_cols), int(cfg["context_length"]), int(config.forecast_horizon),
+        model_id=cfg["model_id"],
     )
 
 

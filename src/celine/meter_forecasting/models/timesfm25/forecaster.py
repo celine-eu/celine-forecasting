@@ -23,7 +23,7 @@ from ..neural_common.covariates import resolve_covariate_columns
 from ..neural_common.persistence import NeuralFitted
 from ..neural_common.predict import predict_forecast_frame
 from ..neural_common.transform import LogStandardizeTransform
-from .config import MODEL_ID, settings
+from .config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -43,11 +43,13 @@ class TimesFM25Fitted(NeuralFitted):
         transform: LogStandardizeTransform,
         covariate_cols: list[str],
         context_length: int,
+        model_id: str = "",
     ) -> None:
         self._model = model
         self._transform = transform
         self._covariate_cols = covariate_cols
         self._context_length = context_length
+        self._model_id = model_id
 
     def predict(
         self,
@@ -128,7 +130,9 @@ class TimesFM25Fitted(NeuralFitted):
         import timesfm
         import torch
 
-        model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(MODEL_ID)
+        from .config import DEFAULT_MODEL_ID
+
+        model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(self._model_id or DEFAULT_MODEL_ID)
         inner = model.model
         if torch.cuda.is_available() and torch.cuda.device_count() > 0:
             if next(inner.parameters()).device.type != "cuda":
@@ -142,6 +146,7 @@ class TimesFM25Fitted(NeuralFitted):
             "std_": self._transform.std_,
             "covariate_cols": self._covariate_cols,
             "context_length": self._context_length,
+            "model_id": self._model_id,
         }
 
     def _restore_meta(self, meta: dict) -> None:
@@ -150,6 +155,7 @@ class TimesFM25Fitted(NeuralFitted):
         self._transform.std_ = meta["std_"]
         self._covariate_cols = meta["covariate_cols"]
         self._context_length = meta["context_length"]
+        self._model_id = meta.get("model_id", "")
 
 
 class TimesFM25Forecaster:
@@ -188,7 +194,7 @@ class TimesFM25Forecaster:
             return None
         transform = LogStandardizeTransform().fit(train[target].to_numpy(dtype=float))
         model = _build_timesfm25(train, target, covariate_cols, cfg, scope, config)
-        return TimesFM25Fitted(model, transform, covariate_cols, cfg["context_length"])
+        return TimesFM25Fitted(model, transform, covariate_cols, cfg["context_length"], cfg["model_id"])
 
 
 def _build_timesfm25(
@@ -227,7 +233,7 @@ def _build_timesfm25(
             "a bespoke custom training loop); using the zero-shot model."
         )
 
-    model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(MODEL_ID)
+    model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(cfg["model_id"])
     inner = model.model
     if torch.cuda.is_available() and torch.cuda.device_count() > 0:
         if next(inner.parameters()).device.type != "cuda":

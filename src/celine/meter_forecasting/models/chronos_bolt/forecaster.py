@@ -23,7 +23,7 @@ from ..neural_common.covariates import resolve_covariate_columns
 from ..neural_common.persistence import NeuralFitted
 from ..neural_common.predict import predict_forecast_frame
 from ..neural_common.transform import LogStandardizeTransform
-from .config import MODEL_ID, settings
+from .config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -211,7 +211,7 @@ def _build_chronos_bolt(
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.bfloat16 if device == "cuda" else torch.float32
-    return BaseChronosPipeline.from_pretrained(MODEL_ID, device_map=device, dtype=dtype)
+    return BaseChronosPipeline.from_pretrained(cfg["model_id"], device_map=device, dtype=dtype)
 
 
 register_backend(ChronosBoltForecaster, available=_AVAILABLE)

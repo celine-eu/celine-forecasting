@@ -227,22 +227,27 @@ bias_correction:
 # ---------------------------------------------------------------------------
 backends:
   ttm:
+    model_id: ibm-granite/granite-timeseries-ttm-r2
     finetune: true                # fine-tune head+decoder (false = zero-shot)
     context_length: 512
     covariates: true
   chronos2:
+    model_id: amazon/chronos-2    # ~700M params
     finetune: false               # foundation models default to zero-shot
     context_length: 512
     covariates: true
   chronos_bolt:
+    model_id: amazon/chronos-bolt-small  # small (safe for 12GB GPU); bolt-base for larger GPUs
     finetune: false
     context_length: 512
     covariates: false             # Chronos-Bolt is univariate (no covariates)
   timesfm25:
+    model_id: google/timesfm-2.5-200m-pytorch  # 200M params, single variant
     finetune: false
     context_length: 512
     covariates: true
   moirai:
+    model_id: Salesforce/moirai-1.0-R-small  # small (safe for 12GB GPU); -base or -large for bigger GPUs
     finetune: false
     context_length: 512
     covariates: true

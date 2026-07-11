@@ -25,7 +25,7 @@ from ..neural_common.covariates import resolve_covariate_columns
 from ..neural_common.persistence import NeuralFitted
 from ..neural_common.predict import predict_forecast_frame
 from ..neural_common.transform import LogStandardizeTransform
-from .config import TTM_MODEL_ID, ttm_settings
+from .config import ttm_settings
 
 _AVAILABLE = importlib.util.find_spec("tsfm_public") is not None
 
@@ -287,7 +287,7 @@ def _build_ttm(
     )
 
     model = get_model(
-        model_path=TTM_MODEL_ID,
+        model_path=settings["model_id"],
         context_length=context_length,
         prediction_length=prediction_length,
         num_input_channels=tsp.num_input_channels,

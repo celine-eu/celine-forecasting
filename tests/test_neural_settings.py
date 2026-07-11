@@ -12,4 +12,4 @@ def test_reads_config_section_overriding_default() -> None:
 def test_falls_back_to_defaults_for_unknown_backend() -> None:
     config = load_config()
     settings = backend_settings(config, "no_such_backend", context_length=99, finetune=True)
-    assert settings == {"context_length": 99, "finetune": True, "covariates": True}
+    assert settings == {"model_id": "", "context_length": 99, "finetune": True, "covariates": True}
