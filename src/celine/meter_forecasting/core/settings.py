@@ -35,7 +35,12 @@ class Settings(BaseSettings):
     database_url: str = "postgresql://postgres:securepassword123@172.17.0.1:15432/datasets"
 
     # MLflow
-    mlflow_tracking_uri: str = "http://172.17.0.1:5000"
+    mlflow_tracking_uri: str = "http://mlflow.celine.localhost"
+
+    # OIDC auth (service-to-service via Keycloak)
+    oidc_issuer_url: str = "http://keycloak.celine.localhost/realms/celine"
+    oidc_client_id: str = "svc-forecast"
+    oidc_client_secret: str = "svc-forecast"
 
     # MinIO / S3 artifact store
     mlflow_s3_endpoint_url: str = "http://172.17.0.1:9000"

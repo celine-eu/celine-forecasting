@@ -69,6 +69,7 @@ services:
         --port 5000
         --app-name celine-auth
         --allowed-hosts mlflow.celine.localhost,localhost
+        --cors-allowed-origins http://mlflow.celine.localhost
         --backend-store-uri postgresql://postgres:securepassword123@172.17.0.1:15432/mlflow
         --default-artifact-root s3://mlflow-artifacts
         --artifacts-destination s3://mlflow-artifacts

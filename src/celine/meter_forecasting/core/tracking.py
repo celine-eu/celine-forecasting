@@ -110,6 +110,13 @@ class MlflowTracker(BaseTracker):
         os.environ.setdefault("AWS_SECRET_ACCESS_KEY", settings.aws_secret_access_key)
         os.environ.setdefault("MLFLOW_HTTP_REQUEST_MAX_RETRIES", "3")
         os.environ.setdefault("MLFLOW_HTTP_REQUEST_TIMEOUT", "120")
+
+        self._settings = settings
+        self._token_expires_at: float = 0
+
+        if not os.environ.get("MLFLOW_TRACKING_TOKEN"):
+            self._refresh_token()
+
         mlflow.set_tracking_uri(uri)
         mlflow.set_registry_uri(uri)
         logger.info("MLflow tracking URI: %s", uri)
@@ -118,8 +125,36 @@ class MlflowTracker(BaseTracker):
         self._registered_name = tracking_cfg.get("registered_model_name", "meter-forecast-lgb")
         mlflow.set_experiment(self._experiment_name)
 
+    def _refresh_token(self) -> None:
+        """Acquire or refresh a Keycloak service token."""
+        import time
+
+        import requests
+
+        if time.time() < self._token_expires_at - 30:
+            return
+
+        try:
+            r = requests.post(
+                f"{self._settings.oidc_issuer_url}/protocol/openid-connect/token",
+                data={
+                    "grant_type": "client_credentials",
+                    "client_id": self._settings.oidc_client_id,
+                    "client_secret": self._settings.oidc_client_secret,
+                },
+                timeout=10.0,
+            )
+            r.raise_for_status()
+            payload = r.json()
+            os.environ["MLFLOW_TRACKING_TOKEN"] = payload["access_token"]
+            self._token_expires_at = time.time() + float(payload.get("expires_in", 300))
+            logger.info("Acquired OIDC token for %s", self._settings.oidc_client_id)
+        except Exception as exc:
+            logger.warning("Failed to acquire OIDC token: %s", exc)
+
     @contextmanager
     def run(self, run_name: str | None = None, *, nested: bool = False) -> Iterator[MlflowTracker]:
+        self._refresh_token()
         with self._mlflow.start_run(run_name=run_name, nested=nested):
             yield self
 
