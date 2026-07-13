@@ -124,6 +124,55 @@ class TestLoadMetersFromDb:
         with pytest.raises(ValueError, match="Invalid table name"):
             load_meters_from_db(config, engine=mock_engine)
 
+    def test_filters_scalar_and_list(self, meter_df, mock_engine):
+        """`filters` adds parameterized WHERE clauses: scalar → =, list → ANY."""
+        from celine.meter_forecasting.core.db import load_meters_from_db
+
+        config = [
+            {
+                "table": "silver.meters",
+                "filters": {
+                    "meter_type": "M1",
+                    "cf_type": ["CF1", "CF2", "CF3", "CF4"],
+                },
+            }
+        ]
+        with patch("pandas.read_sql", return_value=meter_df) as read_sql:
+            df = load_meters_from_db(config, engine=mock_engine)
+
+        assert len(df) == 96
+        query = str(read_sql.call_args.args[0])
+        params = read_sql.call_args.kwargs["params"]
+        assert "WHERE" in query
+        assert "meter_type = :filter_meter_type" in query
+        assert "cf_type = ANY(:filter_cf_type)" in query
+        assert params["filter_meter_type"] == "M1"
+        assert params["filter_cf_type"] == ["CF1", "CF2", "CF3", "CF4"]
+
+    def test_filters_combine_with_device_ids(self, meter_df, mock_engine):
+        from celine.meter_forecasting.core.db import load_meters_from_db
+
+        config = [{"table": "silver.meters", "filters": {"meter_type": "M1"}}]
+        with patch("pandas.read_sql", return_value=meter_df) as read_sql:
+            load_meters_from_db(config, engine=mock_engine, device_ids=["dev-A"])
+
+        query = str(read_sql.call_args.args[0])
+        params = read_sql.call_args.kwargs["params"]
+        assert "device_id = ANY(:device_ids)" in query
+        assert "meter_type = :filter_meter_type" in query
+        assert " AND " in query
+        assert params["device_ids"] == ["dev-A"]
+        assert params["filter_meter_type"] == "M1"
+
+    def test_invalid_filter_column_raises(self, meter_df, mock_engine):
+        from celine.meter_forecasting.core.db import load_meters_from_db
+
+        config = [{"table": "silver.meters", "filters": {"cf_type; DROP": "x"}}]
+        with (
+            patch("pandas.read_sql", return_value=meter_df),
+            pytest.raises(ValueError, match="Invalid filter column"),
+        ):
+            load_meters_from_db(config, engine=mock_engine)
 
 class TestLoadWeatherFromDb:
     def test_weather_load(self, weather_df, mock_engine):

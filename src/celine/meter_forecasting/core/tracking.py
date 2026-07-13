@@ -97,7 +97,16 @@ class MlflowTracker(BaseTracker):
 
     enabled = True
 
-    def __init__(self, config: ForecastConfig) -> None:
+    def __init__(self, config: ForecastConfig, *, experiment_name: str | None = None) -> None:
+        """Create an MLflow tracker for ``config``.
+
+        Args:
+            config: Pipeline configuration (``config.tracking`` controls the
+                tracking URI, default experiment name, and model registry).
+            experiment_name: Override the configured MLflow experiment name
+                for this tracker instance only. ``None`` keeps
+                ``config.tracking["experiment_name"]`` (today's behavior).
+        """
         import mlflow
 
         from .settings import settings
@@ -123,7 +132,9 @@ class MlflowTracker(BaseTracker):
         mlflow.set_tracking_uri(uri)
         mlflow.set_registry_uri(uri)
         logger.info("MLflow tracking URI: %s", uri)
-        self._experiment_name = tracking_cfg.get("experiment_name", "meter-forecast")
+        self._experiment_name = experiment_name or tracking_cfg.get(
+            "experiment_name", "meter-forecast"
+        )
         self._register = bool(tracking_cfg.get("register_model", False))
         self._registered_name = tracking_cfg.get("registered_model_name", "meter-forecast-lgb")
         mlflow.set_experiment(self._experiment_name)
@@ -379,13 +390,26 @@ class MlflowTracker(BaseTracker):
         )
 
 
-def get_tracker(config: ForecastConfig) -> BaseTracker:
-    """Return an MLflow tracker, or a no-op tracker if unavailable/disabled."""
+def get_tracker(config: ForecastConfig, *, experiment_name: str | None = None) -> BaseTracker:
+    """Return an MLflow tracker, or a no-op tracker if unavailable/disabled.
+
+    Args:
+        config: Pipeline configuration (``config.tracking`` controls whether
+            tracking is enabled and the default experiment name/URI).
+        experiment_name: Override the configured MLflow experiment name for
+            this tracker only. ``None`` keeps today's behavior byte-identical
+            (the config-defined default experiment). Accepted and ignored by
+            the no-op tracker path.
+
+    Returns:
+        An ``MlflowTracker`` when tracking is enabled and mlflow is
+        installed, otherwise a no-op ``BaseTracker``.
+    """
     if not config.tracking.get("enabled", True):
         logger.info("Tracking disabled in config — using no-op tracker")
         return BaseTracker()
     try:
-        return MlflowTracker(config)
+        return MlflowTracker(config, experiment_name=experiment_name)
     except ImportError:
         logger.warning("mlflow not installed — install `meter-forecast[mlflow]` to enable tracking")
         return BaseTracker()

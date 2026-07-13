@@ -23,6 +23,7 @@ from .validation import SchemaError, validate_raw_schema
 logger = logging.getLogger(__name__)
 
 _TABLE_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_.]*$")
+_COLUMN_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
 def _require_sqlalchemy():
@@ -57,23 +58,65 @@ def _validate_table_name(table: str) -> None:
         )
 
 
+def _build_filter_clauses(
+    filters: dict[str, Any],
+) -> tuple[list[str], dict[str, Any]]:
+    """Turn a ``{column: value}`` filter map into parameterized SQL conditions.
+
+    Scalar values become ``column = :param``; lists become
+    ``column = ANY(:param)``. Column names are validated as identifiers so
+    they can be safely interpolated.
+
+    Args:
+        filters: The per-source ``filters`` map from the datasets config.
+
+    Returns:
+        A tuple of (SQL condition strings, bind parameters).
+
+    Raises:
+        ValueError: If a filter column is not a valid SQL identifier.
+    """
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
+    for column, value in filters.items():
+        if not _COLUMN_RE.match(column):
+            raise ValueError(
+                f"Invalid filter column {column!r} — must match [a-zA-Z_][a-zA-Z0-9_]*"
+            )
+        param = f"filter_{column}"
+        if isinstance(value, (list, tuple)):
+            clauses.append(f"{column} = ANY(:{param})")
+            params[param] = list(value)
+        else:
+            clauses.append(f"{column} = :{param}")
+            params[param] = value
+    return clauses, params
+
+
 def _read_table(
     engine: Any,
     table: str,
     *,
     device_ids: list[str] | None = None,
+    filters: dict[str, Any] | None = None,
 ) -> pd.DataFrame:
     sa = _require_sqlalchemy()
     _validate_table_name(table)
 
+    clauses: list[str] = []
+    params: dict[str, Any] = {}
     if device_ids is not None:
-        query = sa.text(
-            f"SELECT * FROM {table} WHERE device_id = ANY(:device_ids)"  # noqa: S608
-        )
-        params: dict[str, Any] = {"device_ids": device_ids}
-    else:
-        query = sa.text(f"SELECT * FROM {table}")  # noqa: S608
-        params = {}
+        clauses.append("device_id = ANY(:device_ids)")
+        params["device_ids"] = device_ids
+    if filters:
+        filter_clauses, filter_params = _build_filter_clauses(filters)
+        clauses.extend(filter_clauses)
+        params.update(filter_params)
+
+    sql = f"SELECT * FROM {table}"  # noqa: S608
+    if clauses:
+        sql += " WHERE " + " AND ".join(clauses)
+    query = sa.text(sql)
 
     with engine.connect() as conn:
         df = pd.read_sql(query, conn, params=params or None)
@@ -96,7 +139,9 @@ def load_meters_from_db(
     Args:
         meters_config: The ``datasets.meters`` list from the pipeline YAML.
             Each entry has ``table`` (required), ``columns`` (optional
-            ``{source: contract}`` map), and ``assume_tz`` (default ``"UTC"``).
+            ``{source: contract}`` map), ``assume_tz`` (default ``"UTC"``),
+            and ``filters`` (optional ``{column: value}`` map applied as
+            equality WHERE clauses; list values match any element).
         engine: A SQLAlchemy engine (from :func:`build_engine`).
         device_ids: Optional filter — only load these device IDs.
 
@@ -107,7 +152,9 @@ def load_meters_from_db(
 
     for source in meters_config:
         table = source["table"]
-        raw = _read_table(engine, table, device_ids=device_ids)
+        raw = _read_table(
+            engine, table, device_ids=device_ids, filters=source.get("filters")
+        )
         if raw.empty:
             logger.warning("No rows from %s", table)
             continue

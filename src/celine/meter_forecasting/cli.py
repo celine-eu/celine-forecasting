@@ -52,6 +52,17 @@ Lon = Annotated[float | None, typer.Option(help="Site longitude — auto-downloa
 Output = Annotated[Path, typer.Option(help="Output directory")]
 Model = Annotated[str, typer.Option(help="Forecasting backend: lightgbm (default)")]
 Scope = Annotated[str, typer.Option(help="Training scope: per_device (default) or pooled")]
+Candidates = Annotated[
+    str,
+    typer.Option(
+        help=(
+            "Comma-separated backend candidates, each 'backend' or 'backend:scope' "
+            "(e.g. lightgbm,ttm:pooled). The seasonal-naive baseline is always "
+            "included automatically."
+        )
+    ),
+]
+Origins = Annotated[int, typer.Option(help="Rolling-origin count per candidate")]
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -144,6 +155,110 @@ def _resolve_weather(
         pv_temp_coeff=float(weather_cfg.get("pv_temp_coeff", 0.004)),
         pv_temp_ref_c=float(weather_cfg.get("pv_temp_ref_c", 25.0)),
     )
+
+
+def _parse_candidate_tokens(candidates: str) -> list[tuple[str, str, str]]:
+    """Parse ``--candidates`` into ``(name, backend, scope)`` tuples.
+
+    Args:
+        candidates: Comma-separated tokens, each ``backend`` or ``backend:scope``.
+
+    Returns:
+        One ``(name, backend, scope)`` tuple per token — ``name`` is the raw
+        token (used as the unique :meth:`BenchmarkSuite.add_candidate` label),
+        ``scope`` defaults to ``"per_device"``.
+
+    Raises:
+        typer.Exit: Exit code 2 if a token is the literal ``"naive"`` (the
+            seasonal-naive baseline is always included automatically, so
+            requesting it explicitly is redundant and rejected). Exit code 1
+            if a token names an unregistered backend.
+    """
+    from .core.forecaster import get_forecaster
+
+    parsed: list[tuple[str, str, str]] = []
+    for raw_token in candidates.split(","):
+        token = raw_token.strip()
+        if not token:
+            continue
+        if token == "naive":
+            typer.echo("seasonal naive is always included", err=True)
+            raise typer.Exit(2)
+        backend, _, scope = token.partition(":")
+        scope = scope or "per_device"
+        try:
+            get_forecaster(backend)
+        except ValueError as exc:
+            typer.echo(str(exc), err=True)
+            raise typer.Exit(1)
+        parsed.append((token, backend, scope))
+    return parsed
+
+
+def _benchmark_experiment_name(data_end: pd.Timestamp) -> str:
+    """Deterministic MLflow experiment name for a benchmark run.
+
+    Args:
+        data_end: Max ``ts_hour`` of the loaded data. Never wall-clock time,
+            so a given dataset always maps to the same experiment name.
+
+    Returns:
+        ``benchmark-meters-{data_end:%Y%m%d}``.
+    """
+    return f"benchmark-meters-{data_end:%Y%m%d}"
+
+
+@app.command()
+def benchmark(
+    config: Config = None,
+    datasets_config: DatasetsConfig = None,
+    verbose: Verbose = False,
+    meters: Meters = None,
+    weather: Weather = None,
+    assume_tz: AssumeTz = "UTC",
+    db_uri: DbUri = None,
+    device_ids: DeviceIds = None,
+    lat: Lat = None,
+    lon: Lon = None,
+    output: Output = Path("meter_forecast_out"),
+    candidates: Candidates = "lightgbm",
+    origins: Origins = 21,
+) -> None:
+    """Compare model backends on identical rolling-origin splits, logged to MLflow."""
+    _setup_logging(verbose)
+    cfg = _load_config(config, datasets_config)
+    tokens = _parse_candidate_tokens(candidates)
+
+    df_meters = _load_meters_from_opts(
+        cfg, meters=meters, assume_tz=assume_tz, db_uri=db_uri, device_ids=device_ids,
+    )
+    df_weather = _resolve_weather(
+        df_meters, cfg, weather_path=weather, lat=lat, lon=lon, db_uri=db_uri,
+    )
+
+    from .core.benchmark import BenchmarkSuite
+    from .core.tracking import get_tracker
+
+    processed = build_processed_hourly(df_meters, cfg, df_weather=df_weather)
+    data_end = processed[COL_TS_HOUR].max()
+    experiment_name = _benchmark_experiment_name(data_end)
+
+    suite = BenchmarkSuite("meters", processed, cfg, weather_df=df_weather)
+    for name, backend, scope in tokens:
+        suite.add_candidate(name, backend, scope=scope)
+
+    tracker = get_tracker(cfg, experiment_name=experiment_name)
+    result = suite.run(n_origins=origins, tracker=tracker)
+
+    output.mkdir(parents=True, exist_ok=True)
+    comparison_path = output / "benchmark_comparison.csv"
+    per_origin_path = output / "benchmark_per_origin.csv"
+    result.comparison.to_csv(comparison_path)
+    result.per_origin.to_csv(per_origin_path, index=False)
+
+    typer.echo(result.comparison.round(4).to_string())
+    typer.echo(f"\nWinner: {result.winner}")
+    typer.echo(f"\nSaved {comparison_path} and {per_origin_path}")
 
 
 @app.command()

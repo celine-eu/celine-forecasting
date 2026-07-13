@@ -1,6 +1,6 @@
 FROM python:3.12-slim
 
-ARG MLFLOW_VERSION=3.13.0
+ARG MLFLOW_VERSION=3.14.0
 
 RUN pip install --no-cache-dir \
     "mlflow[postgres]==${MLFLOW_VERSION}" \

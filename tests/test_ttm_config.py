@@ -1,9 +1,9 @@
 from celine.meter_forecasting.core.config import load_config
-from celine.meter_forecasting.models.ttm.config import TTM_MODEL_ID, ttm_settings
+from celine.meter_forecasting.models.ttm.config import DEFAULT_MODEL_ID, ttm_settings
 
 
 def test_model_id() -> None:
-    assert TTM_MODEL_ID == "ibm-granite/granite-timeseries-ttm-r2"
+    assert DEFAULT_MODEL_ID == "ibm-granite/granite-timeseries-ttm-r2"
 
 
 def test_settings_defaults() -> None:

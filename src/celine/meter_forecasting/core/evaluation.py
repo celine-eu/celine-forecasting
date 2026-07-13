@@ -79,6 +79,41 @@ def compute_metrics(group: pd.DataFrame) -> pd.Series:
     )
 
 
+def backtest_origins(
+    dev: pd.DataFrame, config: ForecastConfig, *, horizon: int
+) -> list[pd.Timestamp]:
+    """Rolling-origin timestamps for a single device's leakage-free backtest.
+
+    The single source of truth for origin generation, so every consumer (the
+    built-in :func:`run_backtest` and, e.g., ``BenchmarkSuite``'s naive
+    candidate) produces byte-identical splits for a given device/config.
+
+    Args:
+        dev: Single-device processed hourly frame (already filtered to one
+            device; only ``ts_hour`` is read).
+        config: Pipeline configuration (``backtest.origins``,
+            ``backtest.warmup_days``).
+        horizon: Forecast horizon in hours, folded into the origin offset so
+            forecasts never run past ``dev``'s last timestamp.
+
+    Returns:
+        Origin timestamps in most-recent-first order, excluding any that fall
+        closer to the start of ``dev`` than ``warmup_days``.
+    """
+    n_origins = int(config.backtest.get("origins", 21))
+    warmup = pd.Timedelta(days=int(config.backtest.get("warmup_days", 14)))
+    data_end = dev[COL_TS_HOUR].max()
+    dev_start = dev[COL_TS_HOUR].min()
+
+    origins: list[pd.Timestamp] = []
+    for origin_idx in range(n_origins):
+        origin = data_end - pd.Timedelta(hours=(origin_idx + 1) * 24 + horizon)
+        if origin < dev_start + warmup:
+            continue
+        origins.append(origin)
+    return origins
+
+
 def run_backtest(
     df: pd.DataFrame,
     config: ForecastConfig,
@@ -106,8 +141,6 @@ def run_backtest(
         rows, suitable for :func:`compute_metrics` aggregation.
     """
     horizon = config.forecast_horizon
-    n_origins = int(config.backtest.get("origins", 21))
-    warmup = pd.Timedelta(days=int(config.backtest.get("warmup_days", 14)))
     export_eligible, import_eligible = compute_eligibility(df, config)
     backend = get_forecaster(model)
 
@@ -116,7 +149,6 @@ def run_backtest(
         dev = df[df[COL_DEVICE_ID] == device].copy()
         if dev.empty:
             continue
-        data_end = dev[COL_TS_HOUR].max()
         has_pv = device in export_eligible
 
         for target in config.targets:
@@ -126,11 +158,7 @@ def run_backtest(
                 continue
 
             n_rows = 0
-            for origin_idx in range(n_origins):
-                origin = data_end - pd.Timedelta(hours=(origin_idx + 1) * 24 + horizon)
-                if origin < dev[COL_TS_HOUR].min() + warmup:
-                    continue
-
+            for origin in backtest_origins(dev, config, horizon=horizon):
                 fitted = backend.fit(
                     dev, target, origin, config,
                     scope=scope, has_pv=has_pv, available_columns=available_columns,
