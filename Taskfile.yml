@@ -88,26 +88,26 @@ tasks:
     desc: Smoke test TTM backend
     cmds:
       - uv sync --group ttm
-      - uv run python -m celine.meter_forecasting.models.ttm.smoke_ttm
+      - uv run python -m celine.forecasting.models.ttm.smoke_ttm
 
   smoke:chronos:
     desc: Smoke test Chronos-Bolt + Chronos-2 backends
     cmds:
       - uv sync --group chronos
-      - uv run python -m celine.meter_forecasting.models.chronos_bolt.smoke_chronos_bolt
-      - uv run python -m celine.meter_forecasting.models.chronos2.smoke_chronos2
+      - uv run python -m celine.forecasting.models.chronos_bolt.smoke_chronos_bolt
+      - uv run python -m celine.forecasting.models.chronos2.smoke_chronos2
 
   smoke:timesfm:
     desc: Smoke test TimesFM 2.5 backend
     cmds:
       - uv sync --group timesfm25
-      - uv run python -m celine.meter_forecasting.models.timesfm25.smoke_timesfm25
+      - uv run python -m celine.forecasting.models.timesfm25.smoke_timesfm25
 
   smoke:moirai:
     desc: Smoke test Moirai backend
     cmds:
       - uv sync --group moirai
-      - uv run python -m celine.meter_forecasting.models.moirai.smoke_moirai
+      - uv run python -m celine.forecasting.models.moirai.smoke_moirai
 
   # ── Infrastructure ──────────────────────────────────────────────────────────
 

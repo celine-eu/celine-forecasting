@@ -1,6 +1,6 @@
 import numpy as np
 
-from celine.meter_forecasting.core.cqr import compute_cqr_q
+from celine.forecasting.core.cqr import compute_cqr_q
 
 
 def test_returns_zero_below_min_samples():

@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import numpy as np
 
-from celine.meter_forecasting.core.cleaning import build_processed_hourly
-from celine.meter_forecasting.core.cqr import compute_cqr_q
-from celine.meter_forecasting.core.schema import COL_DEVICE_ID, COL_TS_HOUR
-from celine.meter_forecasting.core.validation import compute_eligibility
-from celine.meter_forecasting.models.lightgbm._train import (
+from celine.forecasting.core.cleaning import build_processed_hourly
+from celine.forecasting.core.cqr import compute_cqr_q
+from celine.forecasting.core.schema import COL_DEVICE_ID, COL_TS_HOUR
+from celine.forecasting.core.validation import compute_eligibility
+from celine.forecasting.models.lightgbm._train import (
     lgb_param_sets,
     train_band_models,
 )
-from celine.meter_forecasting.models.lightgbm.features import (
+from celine.forecasting.models.lightgbm.features import (
     build_monotonic_constraints,
     get_features_for_target,
 )

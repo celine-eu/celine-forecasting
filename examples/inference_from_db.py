@@ -21,15 +21,15 @@ def main() -> None:
     parser.add_argument("--output", default=None, help="Output JSON path (default: stdout)")
     args = parser.parse_args()
 
-    from celine.meter_forecasting.core.cleaning import build_processed_hourly, prepare_weather
-    from celine.meter_forecasting.core.config import load_config
-    from celine.meter_forecasting.core.db import (
+    from celine.forecasting.core.cleaning import build_processed_hourly, prepare_weather
+    from celine.forecasting.core.config import load_config
+    from celine.forecasting.core.db import (
         build_engine,
         load_meters_from_db,
         load_weather_from_db,
     )
-    from celine.meter_forecasting.core.inference import forecast_records_from_bundle
-    from celine.meter_forecasting.core.tracking import get_tracker
+    from celine.forecasting.core.inference import forecast_records_from_bundle
+    from celine.forecasting.core.tracking import get_tracker
 
     config = load_config()
     tracker = get_tracker(config)
@@ -53,7 +53,7 @@ def main() -> None:
     processed = build_processed_hourly(meters, config, df_weather=weather)
     weather_prepared = prepare_weather(weather, config) if weather is not None else None
 
-    from celine.meter_forecasting.models.lightgbm.forecaster import LightGBMFitted
+    from celine.forecasting.models.lightgbm.forecaster import LightGBMFitted
 
     band_models_by_target: dict[str, dict] = {}
     for key, bundle in models.items():

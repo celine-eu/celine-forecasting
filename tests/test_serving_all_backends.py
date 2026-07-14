@@ -6,9 +6,9 @@ import pytest
 
 pytest.importorskip("mlflow")
 
-from celine.meter_forecasting import models  # noqa: F401  (registers all backends)
-from celine.meter_forecasting.core.config import load_config
-from celine.meter_forecasting.core.forecaster import get_forecaster
+from celine.forecasting import models  # noqa: F401  (registers all backends)
+from celine.forecasting.core.config import load_config
+from celine.forecasting.core.forecaster import get_forecaster
 
 # Every backend whose library is installed must round-trip through serving.
 BACKENDS = ["lightgbm"]
@@ -43,7 +43,7 @@ def _device_frame() -> pd.DataFrame:
 @pytest.mark.parametrize("model_name", BACKENDS)
 def test_log_load_predict_roundtrip(model_name: str, tmp_path) -> None:
     import mlflow
-    from celine.meter_forecasting.core.serving import log_forecast_model
+    from celine.forecasting.core.serving import log_forecast_model
 
     config = load_config()
     df = _device_frame()

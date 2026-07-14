@@ -5,9 +5,9 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from celine.meter_forecasting.core.cleaning import build_processed_hourly
-from celine.meter_forecasting.core.schema import METER_CONTRACT, WEATHER_CONTRACT
-from celine.meter_forecasting.core.validation import (
+from celine.forecasting.core.cleaning import build_processed_hourly
+from celine.forecasting.core.schema import METER_CONTRACT, WEATHER_CONTRACT
+from celine.forecasting.core.validation import (
     InsufficientDataError,
     SchemaError,
     assess_sufficiency,
@@ -16,7 +16,12 @@ from celine.meter_forecasting.core.validation import (
 
 
 def test_contract_columns():
-    assert METER_CONTRACT.required_columns == ("device_id", "ts", "consumption_kwh", "production_kwh")
+    assert METER_CONTRACT.required_columns == (
+        "device_id",
+        "ts",
+        "consumption_kwh",
+        "production_kwh",
+    )
     assert WEATHER_CONTRACT.timestamp_column == "datetime"
 
 

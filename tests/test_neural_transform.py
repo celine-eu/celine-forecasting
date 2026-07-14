@@ -1,6 +1,6 @@
 import numpy as np
 
-from celine.meter_forecasting.models.neural_common.transform import LogStandardizeTransform
+from celine.forecasting.models.neural_common.transform import LogStandardizeTransform
 
 
 def test_roundtrip_recovers_input() -> None:

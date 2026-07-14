@@ -1,5 +1,5 @@
-from celine.meter_forecasting.core.config import load_config
-from celine.meter_forecasting.models.ttm.config import DEFAULT_MODEL_ID, ttm_settings
+from celine.forecasting.core.config import load_config
+from celine.forecasting.models.ttm.config import DEFAULT_MODEL_ID, ttm_settings
 
 
 def test_model_id() -> None:

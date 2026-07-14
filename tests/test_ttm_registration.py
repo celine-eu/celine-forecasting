@@ -2,8 +2,8 @@ import importlib.util
 
 import pytest
 
-from celine.meter_forecasting.core.forecaster import get_forecaster, list_backends
-from celine.meter_forecasting.models import ttm  # noqa: F401  (registers)
+from celine.forecasting.core.forecaster import get_forecaster, list_backends
+from celine.forecasting.models import ttm  # noqa: F401  (registers)
 
 _HAS_TTM = importlib.util.find_spec("tsfm_public") is not None
 

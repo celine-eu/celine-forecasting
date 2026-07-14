@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from celine.meter_forecasting import load_config, load_meters, load_weather, train_pipeline
+from celine.forecasting import load_config, load_meters, load_weather, train_pipeline
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
 

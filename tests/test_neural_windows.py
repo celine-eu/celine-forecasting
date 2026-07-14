@@ -1,7 +1,7 @@
 import numpy as np
 import pandas as pd
 
-from celine.meter_forecasting.models.neural_common.windows import Windows, build_windows
+from celine.forecasting.models.neural_common.windows import Windows, build_windows
 
 
 def _frame(n: int) -> pd.DataFrame:

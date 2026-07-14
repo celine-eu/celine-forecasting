@@ -1,5 +1,5 @@
-from celine.meter_forecasting.core.config import load_config
-from celine.meter_forecasting.models.neural_common.settings import backend_settings
+from celine.forecasting.core.config import load_config
+from celine.forecasting.models.neural_common.settings import backend_settings
 
 
 def test_reads_config_section_overriding_default() -> None:

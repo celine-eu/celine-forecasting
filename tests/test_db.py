@@ -1,4 +1,4 @@
-"""Tests for the SQL data loader (celine.meter_forecasting.db).
+"""Tests for the SQL data loader (celine.forecasting.db).
 
 All tests mock pd.read_sql so no real database is required.
 """
@@ -62,7 +62,7 @@ def mock_engine():
 
 class TestLoadMetersFromDb:
     def test_single_source(self, meter_df, mock_engine):
-        from celine.meter_forecasting.core.db import load_meters_from_db
+        from celine.forecasting.core.db import load_meters_from_db
 
         config = [{"table": "silver.meters"}]
         with patch("pandas.read_sql", return_value=meter_df):
@@ -73,7 +73,7 @@ class TestLoadMetersFromDb:
         assert len(df) == 96
 
     def test_multi_source_dedup(self, meter_df, mock_engine):
-        from celine.meter_forecasting.core.db import load_meters_from_db
+        from celine.forecasting.core.db import load_meters_from_db
 
         df2 = meter_df.copy()
         df2["consumption_kwh"] = 0.999
@@ -86,7 +86,7 @@ class TestLoadMetersFromDb:
         assert (df["consumption_kwh"] == 0.2).all()
 
     def test_column_mapping(self, mapped_df, mock_engine):
-        from celine.meter_forecasting.core.db import load_meters_from_db
+        from celine.forecasting.core.db import load_meters_from_db
 
         config = [
             {
@@ -107,8 +107,8 @@ class TestLoadMetersFromDb:
         assert (df["device_id"] == "dev-B").all()
 
     def test_empty_sources_raises(self, mock_engine):
-        from celine.meter_forecasting.core.db import load_meters_from_db
-        from celine.meter_forecasting.core.validation import SchemaError
+        from celine.forecasting.core.db import load_meters_from_db
+        from celine.forecasting.core.validation import SchemaError
 
         config = [{"table": "silver.empty"}]
         with (
@@ -118,7 +118,7 @@ class TestLoadMetersFromDb:
             load_meters_from_db(config, engine=mock_engine)
 
     def test_invalid_table_name_raises(self, mock_engine):
-        from celine.meter_forecasting.core.db import load_meters_from_db
+        from celine.forecasting.core.db import load_meters_from_db
 
         config = [{"table": "silver.meters; DROP TABLE"}]
         with pytest.raises(ValueError, match="Invalid table name"):
@@ -126,7 +126,7 @@ class TestLoadMetersFromDb:
 
     def test_filters_scalar_and_list(self, meter_df, mock_engine):
         """`filters` adds parameterized WHERE clauses: scalar → =, list → ANY."""
-        from celine.meter_forecasting.core.db import load_meters_from_db
+        from celine.forecasting.core.db import load_meters_from_db
 
         config = [
             {
@@ -150,7 +150,7 @@ class TestLoadMetersFromDb:
         assert params["filter_cf_type"] == ["CF1", "CF2", "CF3", "CF4"]
 
     def test_filters_combine_with_device_ids(self, meter_df, mock_engine):
-        from celine.meter_forecasting.core.db import load_meters_from_db
+        from celine.forecasting.core.db import load_meters_from_db
 
         config = [{"table": "silver.meters", "filters": {"meter_type": "M1"}}]
         with patch("pandas.read_sql", return_value=meter_df) as read_sql:
@@ -165,7 +165,7 @@ class TestLoadMetersFromDb:
         assert params["filter_meter_type"] == "M1"
 
     def test_invalid_filter_column_raises(self, meter_df, mock_engine):
-        from celine.meter_forecasting.core.db import load_meters_from_db
+        from celine.forecasting.core.db import load_meters_from_db
 
         config = [{"table": "silver.meters", "filters": {"cf_type; DROP": "x"}}]
         with (
@@ -176,7 +176,7 @@ class TestLoadMetersFromDb:
 
 class TestLoadWeatherFromDb:
     def test_weather_load(self, weather_df, mock_engine):
-        from celine.meter_forecasting.core.db import load_weather_from_db
+        from celine.forecasting.core.db import load_weather_from_db
 
         config = {"table": "gold.weather"}
         with patch("pandas.read_sql", return_value=weather_df):
@@ -186,7 +186,7 @@ class TestLoadWeatherFromDb:
         assert len(df) == 24
 
     def test_weather_column_mapping(self, mock_engine):
-        from celine.meter_forecasting.core.db import load_weather_from_db
+        from celine.forecasting.core.db import load_weather_from_db
 
         ts = pd.date_range("2025-03-01", periods=24, freq="h")
         df_src = pd.DataFrame(
@@ -204,20 +204,20 @@ class TestLoadWeatherFromDb:
 
 class TestBuildEngine:
     def test_explicit_uri(self):
-        from celine.meter_forecasting.core.db import build_engine
+        from celine.forecasting.core.db import build_engine
 
         engine = build_engine("sqlite:///:memory:")
         assert engine is not None
 
     def test_env_var_fallback(self):
-        from celine.meter_forecasting.core.db import build_engine
+        from celine.forecasting.core.db import build_engine
 
         with patch.dict("os.environ", {"DATABASE_URL": "sqlite:///:memory:"}):
             engine = build_engine()
             assert engine is not None
 
     def test_falls_back_to_settings(self):
-        from celine.meter_forecasting.core.db import build_engine
+        from celine.forecasting.core.db import build_engine
 
         engine = build_engine()
         assert engine is not None

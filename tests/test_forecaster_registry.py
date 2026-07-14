@@ -3,9 +3,9 @@ from collections.abc import Iterator
 import pandas as pd
 import pytest
 
-from celine.meter_forecasting.core import forecaster as registry_mod
-from celine.meter_forecasting.core.config import ForecastConfig
-from celine.meter_forecasting.core.forecaster import (
+from celine.forecasting.core import forecaster as registry_mod
+from celine.forecasting.core.config import ForecastConfig
+from celine.forecasting.core.forecaster import (
     Forecaster,
     get_forecaster,
     list_backends,
@@ -28,6 +28,7 @@ def _isolate_registry() -> Iterator[None]:
 class _Dummy:
     name = "dummy"
     required_extra: str | None = None
+    supported_scopes: tuple[str, ...] = ("per_device",)
 
     def fit(
         self,
@@ -66,6 +67,7 @@ def test_missing_extra_raises_actionable_error() -> None:
     class _NeedsTorch:
         name = "needs-torch"
         required_extra: str | None = "ttm"
+        supported_scopes: tuple[str, ...] = ("per_device",)
 
         def fit(
             self,

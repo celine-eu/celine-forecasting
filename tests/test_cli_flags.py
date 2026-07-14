@@ -1,6 +1,6 @@
 from typer.testing import CliRunner
 
-from celine.meter_forecasting.cli import app
+from celine.forecasting.cli import app
 
 runner = CliRunner()
 

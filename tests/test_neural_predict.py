@@ -1,8 +1,8 @@
 import numpy as np
 import pandas as pd
 
-from celine.meter_forecasting.core.config import load_config
-from celine.meter_forecasting.models.neural_common.predict import predict_forecast_frame
+from celine.forecasting.core.config import load_config
+from celine.forecasting.models.neural_common.predict import predict_forecast_frame
 
 
 def _frame(n: int) -> pd.DataFrame:

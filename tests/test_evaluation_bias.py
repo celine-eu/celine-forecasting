@@ -1,7 +1,7 @@
 import pandas as pd
 
-from celine.meter_forecasting.core.config import load_config
-from celine.meter_forecasting.core.evaluation import summarize_backtest
+from celine.forecasting.core.config import load_config
+from celine.forecasting.core.evaluation import summarize_backtest
 
 
 def test_summary_includes_bias_corrected_mae_column() -> None:

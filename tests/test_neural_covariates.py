@@ -1,7 +1,7 @@
 import pandas as pd
 
-from celine.meter_forecasting.core.config import load_config
-from celine.meter_forecasting.models.neural_common.covariates import (
+from celine.forecasting.core.config import load_config
+from celine.forecasting.models.neural_common.covariates import (
     build_calendar_frame,
     resolve_covariate_columns,
 )

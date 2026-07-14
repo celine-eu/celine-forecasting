@@ -16,14 +16,14 @@ import typer
 import yaml
 from typer.testing import CliRunner
 
-from celine.meter_forecasting.cli import (
+from celine.forecasting.cli import (
     _benchmark_experiment_name,
     _parse_candidate_tokens,
     app,
 )
-from celine.meter_forecasting.core.benchmark import NAIVE_MODEL_NAME
-from celine.meter_forecasting.core.config import load_config
-from celine.meter_forecasting.core.tracking import BaseTracker, get_tracker
+from celine.forecasting.core.benchmark import NAIVE_MODEL_NAME
+from celine.forecasting.core.config import load_config
+from celine.forecasting.core.tracking import BaseTracker, get_tracker
 
 runner = CliRunner()
 

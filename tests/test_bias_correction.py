@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 
-from celine.meter_forecasting.core.bias_correction import (
+from celine.forecasting.core.bias_correction import (
     apply_per_horizon_bias_correction,
     compute_per_horizon_bias,
 )

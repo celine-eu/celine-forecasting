@@ -1,9 +1,9 @@
 import numpy as np
 import pandas as pd
 
-from celine.meter_forecasting.core.config import load_config
-from celine.meter_forecasting.core.forecaster import FittedForecaster, get_forecaster
-from celine.meter_forecasting.models import lightgbm as _lgb  # noqa: F401  (registers backend)
+from celine.forecasting.core.config import load_config
+from celine.forecasting.core.forecaster import FittedForecaster, get_forecaster
+from celine.forecasting.models import lightgbm as _lgb  # noqa: F401  (registers backend)
 
 
 def _make_device_frame() -> pd.DataFrame:

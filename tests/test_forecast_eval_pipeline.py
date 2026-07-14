@@ -7,14 +7,14 @@ import json
 import numpy as np
 import pandas as pd
 
-from celine.meter_forecasting.core.baselines import seasonal_naive_forecast
-from celine.meter_forecasting.core.cleaning import build_processed_hourly, prepare_weather
-from celine.meter_forecasting.core.config import load_config
-from celine.meter_forecasting.core.evaluation import calc_mae, calc_rmse, compute_metrics
-from celine.meter_forecasting.core.forecaster import get_forecaster
-from celine.meter_forecasting.core.schema import COL_DEVICE_ID, COL_TS_HOUR
-from celine.meter_forecasting.core.tracking import BaseTracker, get_tracker
-from celine.meter_forecasting.pipeline import train_pipeline
+from celine.forecasting.core.baselines import seasonal_naive_forecast
+from celine.forecasting.core.cleaning import build_processed_hourly, prepare_weather
+from celine.forecasting.core.config import load_config
+from celine.forecasting.core.evaluation import calc_mae, calc_rmse, compute_metrics
+from celine.forecasting.core.forecaster import get_forecaster
+from celine.forecasting.core.schema import COL_DEVICE_ID, COL_TS_HOUR
+from celine.forecasting.core.tracking import BaseTracker, get_tracker
+from celine.forecasting.pipeline import train_pipeline
 
 
 def test_metrics_match_hand_computation():
@@ -30,6 +30,26 @@ def test_compute_metrics_coverage():
     )
     m = compute_metrics(df)
     assert m["coverage"] == 100.0
+    assert m["mae"] == 0.0
+
+
+def test_compute_metrics_coverage_nan_without_finite_band():
+    """Coverage is NaN (never a measured-0) when no row carries a finite band.
+
+    Uncalibrated pooled backtests emit rows with NaN interval bounds; coverage
+    for such a group must be NaN so the pipeline skips logging it rather than
+    reporting a misleading ``coverage = 0``.
+    """
+    df = pd.DataFrame(
+        {
+            "actual": [1.0, 2.0],
+            "prediction": [1.0, 2.0],
+            "lower": [float("nan"), float("nan")],
+            "upper": [float("nan"), float("nan")],
+        }
+    )
+    m = compute_metrics(df)
+    assert pd.isna(m["coverage"])
     assert m["mae"] == 0.0
 
 

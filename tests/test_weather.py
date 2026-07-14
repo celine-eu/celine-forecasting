@@ -6,8 +6,8 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from celine.meter_forecasting.core.schema import WEATHER_CONTRACT
-from celine.meter_forecasting.core.weather import (
+from celine.forecasting.core.schema import WEATHER_CONTRACT
+from celine.forecasting.core.weather import (
     _haurwitz_clearsky_ghi,
     build_weather_features,
     solar_position,
@@ -85,7 +85,7 @@ def test_missing_required_column_raises():
 
 def test_download_splits_archive_and_forecast(monkeypatch):
     """A window spanning past→future hits both endpoints, deduped to [start,end]."""
-    from celine.meter_forecasting.core import weather as weather_mod
+    from celine.forecasting.core import weather as weather_mod
 
     today = pd.Timestamp.now(tz="UTC").normalize()
     start = today - pd.Timedelta(days=30)
@@ -146,7 +146,7 @@ def _fake_forecast_payload(today: pd.Timestamp):
 
 def test_download_passes_elevation_when_provided(monkeypatch):
     """An explicit elevation is forwarded to every Open-Meteo request."""
-    from celine.meter_forecasting.core import weather as weather_mod
+    from celine.forecasting.core import weather as weather_mod
 
     today = pd.Timestamp.now(tz="UTC").normalize()
     captured: list[dict] = []
@@ -166,7 +166,7 @@ def test_download_passes_elevation_when_provided(monkeypatch):
 
 def test_download_omits_elevation_by_default(monkeypatch):
     """With no elevation, the param is absent so Open-Meteo auto-detects it."""
-    from celine.meter_forecasting.core import weather as weather_mod
+    from celine.forecasting.core import weather as weather_mod
 
     today = pd.Timestamp.now(tz="UTC").normalize()
     captured: list[dict] = []
@@ -184,8 +184,8 @@ def test_download_omits_elevation_by_default(monkeypatch):
 
 def test_features_flow_through_cleaning_prepare_weather():
     """The built features must satisfy the existing weather pipeline stage."""
-    from celine.meter_forecasting.core.cleaning import prepare_weather
-    from celine.meter_forecasting.core.config import load_config
+    from celine.forecasting.core.cleaning import prepare_weather
+    from celine.forecasting.core.config import load_config
 
     feats = build_weather_features(_raw_day(), latitude=46.07, longitude=11.12)
     prepared = prepare_weather(feats, load_config())

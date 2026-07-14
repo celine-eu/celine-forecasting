@@ -3,7 +3,7 @@ from pathlib import Path
 
 import numpy as np
 
-from celine.meter_forecasting.models.neural_common.persistence import NeuralFitted
+from celine.forecasting.models.neural_common.persistence import NeuralFitted
 
 
 class _DummyFitted(NeuralFitted):

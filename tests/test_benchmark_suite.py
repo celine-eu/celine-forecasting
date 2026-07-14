@@ -12,18 +12,22 @@ path of the suite.
 from __future__ import annotations
 
 import copy
+from collections.abc import Iterator
 
 import pandas as pd
 import pytest
 
-from celine.meter_forecasting.core.benchmark import (
+from celine.forecasting.core import forecaster as registry_mod
+from celine.forecasting.core.benchmark import (
     NAIVE_MODEL_NAME,
     BenchmarkSuite,
     _pick_winner,
 )
-from celine.meter_forecasting.core.cleaning import build_processed_hourly
-from celine.meter_forecasting.core.evaluation import backtest_origins, run_backtest
-from celine.meter_forecasting.core.schema import COL_DEVICE_ID
+from celine.forecasting.core.cleaning import build_processed_hourly
+from celine.forecasting.core.config import ForecastConfig
+from celine.forecasting.core.evaluation import backtest_origins, run_backtest
+from celine.forecasting.core.forecaster import register_backend
+from celine.forecasting.core.schema import COL_DEVICE_ID, COL_GRID_IMPORT, COL_TS_HOUR
 
 _CELL_COLS = ["device_id", "target", "origin"]
 
@@ -121,6 +125,157 @@ def test_winner_excludes_naive():
 def test_winner_falls_back_to_naive_when_nothing_beats_it():
     comparison = pd.DataFrame({"mae": [1.0, 5.0]}, index=["seasonal_naive", "bad_model"])
     assert _pick_winner(comparison, "seasonal_naive") == "seasonal_naive"
+
+
+@pytest.fixture
+def _isolate_registry() -> Iterator[None]:
+    """Snapshot and restore the backend registry around a test."""
+    saved = dict(registry_mod._REGISTRY)
+    try:
+        yield
+    finally:
+        registry_mod._REGISTRY.clear()
+        registry_mod._REGISTRY.update(saved)
+
+
+class _FakePooledFitted:
+    """A pooled fitted model whose ``predict`` emits the protocol columns."""
+
+    def predict(
+        self,
+        frame: pd.DataFrame,
+        target: str,
+        origin: pd.Timestamp,
+        config: ForecastConfig,
+        *,
+        weather_df: pd.DataFrame | None = None,
+        has_pv: bool = True,
+        available_columns: set[str] | None = None,
+    ) -> pd.DataFrame:
+        horizon = config.forecast_horizon
+        return pd.DataFrame(
+            {
+                "ts_hour": [origin + pd.Timedelta(hours=h) for h in range(1, horizon + 1)],
+                "horizon": list(range(1, horizon + 1)),
+                "prediction": 0.25,
+                "prediction_lower": 0.2,
+                "prediction_upper": 0.3,
+            }
+        )
+
+
+class _FakePooledBackend:
+    """Records the (target, train_end, devices) of every ``fit`` call.
+
+    Calls are recorded on a class-level log so the registry can instantiate the
+    backend freshly (as ``run_backtest`` does) while the test still inspects
+    every fit. :meth:`reset` clears the log at the start of a test.
+    """
+
+    name = "fake-pooled-bench"
+    required_extra: str | None = None
+    supported_scopes: tuple[str, ...] = ("pooled", "per_device")
+    fit_calls: list[dict] = []
+
+    @classmethod
+    def reset(cls) -> None:
+        cls.fit_calls = []
+
+    def fit(
+        self,
+        frame: pd.DataFrame,
+        target: str,
+        train_end: pd.Timestamp,
+        config: ForecastConfig,
+        *,
+        scope: str = "per_device",
+        has_pv: bool = True,
+        available_columns: set[str] | None = None,
+        calibrate: bool = True,
+    ) -> _FakePooledFitted:
+        type(self).fit_calls.append(
+            {
+                "target": target,
+                "train_end": train_end,
+                "scope": scope,
+                "devices": sorted(frame[COL_DEVICE_ID].unique().tolist()),
+            }
+        )
+        return _FakePooledFitted()
+
+
+def test_pooled_candidate_fits_once_per_origin_over_the_pool(
+    processed, config, _isolate_registry
+):
+    """A pooled candidate fits ONCE per (target, origin) on ALL pool devices.
+
+    The fleet-routing guarantee: ``run_backtest`` must not refit a pool-of-one
+    per device. Every ``fit`` call carries both import-eligible devices, there is
+    exactly one call per (target, origin) cell, and per-device rows still land in
+    the per-origin results.
+    """
+    _FakePooledBackend.reset()
+    register_backend(_FakePooledBackend)
+
+    cfg = copy.deepcopy(config)
+    cfg.targets = ["grid_import"]  # both fixture devices are import-eligible
+
+    suite = BenchmarkSuite("test", processed, cfg)
+    suite.add_candidate("pooled", "fake-pooled-bench", scope="pooled")
+    result = suite.run(n_origins=2, devices=["dev-A", "dev-B"])
+
+    import_calls = [c for c in _FakePooledBackend.fit_calls if c["target"] == COL_GRID_IMPORT]
+    assert import_calls, "the pooled backend never fit grid_import"
+    # Every pooled fit saw BOTH devices' rows (not one refit per device).
+    for call in import_calls:
+        assert call["scope"] == "pooled"
+        assert call["devices"] == ["dev-A", "dev-B"]
+    # Exactly one fit per (target, origin) — no duplicate origins.
+    origins = [c["train_end"] for c in import_calls]
+    assert len(origins) == len(set(origins))
+
+    # Per-device rows survive into the per-origin results for the pooled candidate.
+    pooled_rows = result.per_origin[result.per_origin["candidate"] == "pooled"]
+    assert set(pooled_rows["device_id"]) == {"dev-A", "dev-B"}
+
+
+def test_pooled_cells_match_naive_with_misaligned_device_end(
+    processed, config, _isolate_registry
+):
+    """Pooled origins are per-device-anchored, matching the naive candidate's cells.
+
+    Regression test for the origin-drift defect: when one device's data ends at
+    a NON-24h-aligned offset from the others, anchoring pooled origins on the
+    pool-global max timestamp produces (device, target, origin) cells that never
+    coincide with the per-device/naive candidates' cells, so BenchmarkSuite's
+    common-cell intersection silently collapses. The pooled candidate must score
+    each device on exactly the origins that device's own frame yields.
+    """
+    _FakePooledBackend.reset()
+    register_backend(_FakePooledBackend)
+
+    cfg = copy.deepcopy(config)
+    cfg.targets = ["grid_import"]  # both fixture devices are import-eligible
+
+    # Truncate dev-B by 7 hours so its history ends non-24h-aligned vs dev-A.
+    dev_b_end = (
+        processed.loc[processed[COL_DEVICE_ID] == "dev-B", COL_TS_HOUR].max()
+        - pd.Timedelta(hours=7)
+    )
+    misaligned = processed[
+        (processed[COL_DEVICE_ID] != "dev-B") | (processed[COL_TS_HOUR] <= dev_b_end)
+    ].reset_index(drop=True)
+
+    suite = BenchmarkSuite("test", misaligned, cfg)
+    suite.add_candidate("pooled", "fake-pooled-bench", scope="pooled")
+    result = suite.run(n_origins=2, devices=["dev-A", "dev-B"])
+
+    cells = _cells_by_candidate(result.per_origin)
+    # The pooled candidate scores exactly the cells the naive baseline scores:
+    # per-device-anchored origins, no intersection shrinkage.
+    assert cells["pooled"] == cells[NAIVE_MODEL_NAME]
+    # And the guarantee is exercised for BOTH devices, including the truncated one.
+    assert {"dev-A", "dev-B"} == {device for device, _t, _o in cells["pooled"]}
 
 
 def test_model_config_override_applies_per_candidate(processed, bench_config):

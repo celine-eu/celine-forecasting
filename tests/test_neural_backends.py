@@ -7,8 +7,8 @@ import importlib.util
 
 import pytest
 
-from celine.meter_forecasting import models  # noqa: F401  (registers all backends)
-from celine.meter_forecasting.core.forecaster import get_forecaster, list_backends
+from celine.forecasting import models  # noqa: F401  (registers all backends)
+from celine.forecasting.core.forecaster import get_forecaster, list_backends
 
 # (backend name, importable library, HF checkpoint id)
 BACKENDS = [
@@ -26,7 +26,7 @@ def test_backend_registered(name: str, lib: str, model_id: str) -> None:
 
 @pytest.mark.parametrize("name,lib,model_id", BACKENDS)
 def test_config_model_id(name: str, lib: str, model_id: str) -> None:
-    cfg = importlib.import_module(f"celine.meter_forecasting.models.{name}.config")
+    cfg = importlib.import_module(f"celine.forecasting.models.{name}.config")
     assert cfg.DEFAULT_MODEL_ID == model_id
 
 
@@ -42,15 +42,26 @@ def test_dep_guard_or_available(name: str, lib: str, model_id: str) -> None:
 
 @pytest.mark.parametrize("name,lib,model_id", BACKENDS)
 def test_smoke_and_finetune_importable(name: str, lib: str, model_id: str) -> None:
-    smoke = importlib.import_module(f"celine.meter_forecasting.models.{name}.smoke_{name}")
+    smoke = importlib.import_module(f"celine.forecasting.models.{name}.smoke_{name}")
     assert hasattr(smoke, "main")
-    ft = importlib.import_module(f"celine.meter_forecasting.models.{name}.finetune")
+    ft = importlib.import_module(f"celine.forecasting.models.{name}.finetune")
     assert hasattr(ft, "finetune")
 
 
+@pytest.mark.skipif(
+    importlib.util.find_spec("tsfm_public") is not None,
+    reason="ttm/forecaster.py deliberately imports tsfm (and torch) eagerly when "
+    "installed — transformers is not thread-safe under joblib",
+)
 def test_importing_all_backends_does_not_import_torch() -> None:
+    # Fresh-interpreter check: popping torch from sys.modules in-process
+    # corrupts torch's C-state for later model loads.
+    import subprocess
     import sys
 
-    sys.modules.pop("torch", None)
-    importlib.import_module("celine.meter_forecasting.models")
-    assert "torch" not in sys.modules
+    code = (
+        "import sys; import celine.forecasting.models; "
+        "sys.exit(1 if 'torch' in sys.modules else 0)"
+    )
+    result = subprocess.run([sys.executable, "-c", code], check=False)
+    assert result.returncode == 0

@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from celine.meter_forecasting.core.config import load_config
+from celine.forecasting.core.config import load_config
 
 
 @pytest.fixture
@@ -72,6 +72,47 @@ def raw_weather() -> pd.DataFrame:
 
 
 @pytest.fixture
+def multi_device_meters() -> pd.DataFrame:
+    """Three devices of hourly readings for exercising the pooled path.
+
+    Two devices carry a full 30 days of history and one carries only 15 days,
+    so the pooled frame contains devices of unequal length. Every device has
+    both consumption and PV production, so all three are export- and
+    import-eligible. The series are a deterministic seeded sine + noise so the
+    fixture is reproducible.
+
+    Returns:
+        A meter-contract DataFrame (``device_id``, ``ts``, ``consumption_kwh``,
+        ``production_kwh``) at hourly resolution.
+    """
+    rng = np.random.default_rng(11)
+    specs = [("pool-A", 30), ("pool-B", 30), ("pool-C", 15)]
+    frames = []
+    for device, days in specs:
+        ts = pd.date_range("2025-01-01", periods=days * 24, freq="h", tz="UTC")
+        hours = ts.tz_convert("Europe/Rome").hour.to_numpy()
+        cons = (
+            0.3
+            + 0.2 * np.sin(2 * np.pi * (hours - 18) / 24) ** 2
+            + rng.normal(0, 0.02, len(ts))
+        )
+        prod = 1.0 * np.clip(np.exp(-((hours - 13) ** 2) / 18), 0, None) + rng.normal(
+            0, 0.02, len(ts)
+        )
+        frames.append(
+            pd.DataFrame(
+                {
+                    "device_id": device,
+                    "ts": ts,
+                    "consumption_kwh": np.clip(cons, 0, None).round(4),
+                    "production_kwh": np.clip(prod, 0, None).round(4),
+                }
+            )
+        )
+    return pd.concat(frames, ignore_index=True)
+
+
+@pytest.fixture
 def tiny_meters() -> pd.DataFrame:
     """Only a few days of data — below the sufficiency threshold."""
     ts = pd.date_range("2025-02-01", periods=5 * 24 * 4, freq="15min", tz="UTC")
@@ -83,3 +124,37 @@ def tiny_meters() -> pd.DataFrame:
             "production_kwh": np.zeros(len(ts)),
         }
     )
+
+
+@pytest.fixture(autouse=True)
+def _mlflow_global_state_guard():
+    """Restore MLflow's process-global state after every test.
+
+    ``MlflowTracker`` (and mlflow's fluent API generally) mutates four global
+    knobs: the tracking URI, the registry URI, the cached active-experiment id,
+    and — since mlflow 3.x — the ``MLFLOW_EXPERIMENT_ID`` environment variable.
+    A test that points them at a throwaway store would otherwise break every
+    later test that relies on defaults.
+    """
+    try:
+        from mlflow.tracking import fluent
+
+        import mlflow
+    except ImportError:
+        yield
+        return
+
+    import os
+
+    prev_tracking = mlflow.get_tracking_uri()
+    prev_registry = mlflow.get_registry_uri()
+    prev_active = fluent._active_experiment_id
+    prev_env = os.environ.get("MLFLOW_EXPERIMENT_ID")
+    yield
+    mlflow.set_tracking_uri(prev_tracking)
+    mlflow.set_registry_uri(prev_registry)
+    fluent._active_experiment_id = prev_active
+    if prev_env is None:
+        os.environ.pop("MLFLOW_EXPERIMENT_ID", None)
+    else:
+        os.environ["MLFLOW_EXPERIMENT_ID"] = prev_env
