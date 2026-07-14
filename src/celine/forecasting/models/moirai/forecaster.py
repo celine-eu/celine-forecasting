@@ -21,6 +21,7 @@ from ...core.forecaster import register_backend
 from ...core.schema import COL_TS_HOUR
 from ..neural_common.covariates import resolve_covariate_columns
 from ..neural_common.persistence import NeuralFitted
+from ..neural_common.pooled import PooledZeroShotFitted, build_pool_state
 from ..neural_common.predict import predict_forecast_frame
 from ..neural_common.transform import LogStandardizeTransform
 from .config import settings
@@ -197,6 +198,51 @@ class MoiraiFitted(NeuralFitted):
         self._model_id = meta.get("model_id", "")
 
 
+class MoiraiPooledFitted(PooledZeroShotFitted):
+    """Fleet-pattern pooled Moirai: one checkpoint, per-device scalers."""
+
+    def _make_single(self, transform: LogStandardizeTransform) -> MoiraiFitted:
+        """Build a single-device fitted wrapping the shared Moirai predictor.
+
+        Args:
+            transform: The target device's own scaler, fit on its 0-70% slice.
+
+        Returns:
+            A ``MoiraiFitted`` wrapping the shared predictor and this
+            device's scaler.
+        """
+        return MoiraiFitted(
+            self._model,
+            transform,
+            self._covariate_cols,
+            self._context_length,
+            self._model_id,
+        )
+
+    def _rebuild_model(self, directory: Path) -> object:
+        """Re-pull the Moirai checkpoint from the hub after deserialisation.
+
+        Moirai writes no weights (see :meth:`_save_model` on the base class),
+        so the shared predictor is rebuilt from ``model_id`` rather than from
+        ``directory``.
+
+        Args:
+            directory: Unused — Moirai has no on-disk weights to reload.
+
+        Returns:
+            The reloaded GluonTS ``PyTorchPredictor``.
+        """
+        # Moirai writes no weights: re-pull the checkpoint from the hub.
+        from .config import DEFAULT_MODEL_ID
+
+        return _make_predictor(
+            len(self._covariate_cols),
+            self._context_length,
+            self._prediction_length,
+            model_id=self._model_id or DEFAULT_MODEL_ID,
+        )
+
+
 class MoiraiForecaster:
     """Salesforce/moirai-1.0-R-base backend (zero-shot or fine-tuned)."""
 
@@ -215,16 +261,17 @@ class MoiraiForecaster:
         has_pv: bool = True,
         available_columns: set[str] | None = None,
         calibrate: bool = True,
-    ) -> MoiraiFitted | None:
-        """Load Moirai (zero-shot) for one (device|group, target).
+    ) -> MoiraiPooledFitted | None:
+        """Load Moirai (zero-shot) for a pooled group.
 
-        Returns ``None`` when there is too little history for one context+horizon
-        window. Pooled fine-tuning is not wired in this adapter yet — regardless
-        of ``scope``, this returns the zero-shot predictor (see
-        :func:`_build_moirai`). Note that a pooled fit currently applies a
-        single global target transform fit on the concatenated multi-device
-        frame (unlike the TTM adapter's per-device scaling, which is a
-        follow-up), so mixed-magnitude pools are distorted.
+        Every device in the pool keeps its own target scaler, fit on its own
+        0-70% train slice, and its own 70-85% validation band for CQR — the
+        shared checkpoint is the only thing they have in common. Devices with
+        fewer rows than one context+horizon window are dropped from the pool.
+
+        Returns ``None`` when no device qualifies. Pooled fine-tuning is not
+        wired in this adapter (see :func:`_build_moirai`); the checkpoint is
+        always zero-shot.
         """
         cfg = settings(config)
         covariate_cols = (
@@ -235,12 +282,25 @@ class MoiraiForecaster:
             else []
         )
         train = frame[frame[COL_TS_HOUR] <= train_end]
-        if len(train) < cfg["context_length"] + config.forecast_horizon:
+        state = build_pool_state(
+            train,
+            target,
+            train_end,
+            context_length=int(cfg["context_length"]),
+            horizon=int(config.forecast_horizon),
+        )
+        if not state.transforms:
             return None
-        transform = LogStandardizeTransform().fit(train[target].to_numpy(dtype=float))
+
         model = _build_moirai(train, target, covariate_cols, cfg, scope, config)
-        return MoiraiFitted(
-            model, transform, covariate_cols, cfg["context_length"], cfg["model_id"]
+        return MoiraiPooledFitted(
+            model,
+            state.transforms,
+            state.validation_windows,
+            covariate_cols,
+            int(cfg["context_length"]),
+            int(config.forecast_horizon),
+            cfg["model_id"],
         )
 
 

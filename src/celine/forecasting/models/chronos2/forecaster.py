@@ -21,6 +21,7 @@ from ...core.forecaster import register_backend
 from ...core.schema import COL_TS_HOUR
 from ..neural_common.covariates import resolve_covariate_columns
 from ..neural_common.persistence import NeuralFitted
+from ..neural_common.pooled import PooledZeroShotFitted, build_pool_state
 from ..neural_common.predict import predict_forecast_frame
 from ..neural_common.transform import LogStandardizeTransform
 from .config import settings
@@ -151,6 +152,61 @@ class Chronos2Fitted(NeuralFitted):
         self._context_length = meta["context_length"]
 
 
+class Chronos2PooledFitted(PooledZeroShotFitted):
+    """Fleet-pattern pooled Chronos-2: one checkpoint, per-device scalers."""
+
+    def _make_single(self, transform: LogStandardizeTransform) -> Chronos2Fitted:
+        """Build a single-device fitted wrapping the shared Chronos-2 pipeline.
+
+        Args:
+            transform: The target device's own scaler, fit on its 0-70% slice.
+
+        Returns:
+            A ``Chronos2Fitted`` wrapping the shared pipeline and this
+            device's scaler.
+        """
+        return Chronos2Fitted(
+            self._model,
+            transform,
+            self._covariate_cols,
+            self._context_length,
+        )
+
+    def _save_model(self, directory: Path) -> None:
+        """Persist the shared Chronos-2 weights, overriding the base no-op.
+
+        Unlike moirai/timesfm, Chronos persists real weights: the base class's
+        default (an empty ``directory/model`` dir) would pickle no weights at
+        all via ``NeuralFitted.__getstate__`` (which blobs files only), so
+        ``_rebuild_model`` would later fail to find a checkpoint on disk.
+
+        Args:
+            directory: Directory :meth:`save` is writing into; weights land
+                under ``directory/model``.
+        """
+        # Chronos2Pipeline wraps a HF PreTrainedModel at ``.model``.
+        self._model.model.save_pretrained(directory / "model")  # type: ignore[attr-defined]
+
+    def _rebuild_model(self, directory: Path) -> object:
+        """Reload the shared Chronos-2 pipeline from the weights on disk.
+
+        Args:
+            directory: The directory :meth:`_save_model` wrote weights into.
+
+        Returns:
+            The reloaded ``Chronos2Pipeline``, on GPU + bfloat16 when CUDA is
+            available, else CPU + float32.
+        """
+        import torch
+        from chronos import Chronos2Pipeline  # lazy
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        dtype = torch.bfloat16 if device == "cuda" else torch.float32
+        return Chronos2Pipeline.from_pretrained(
+            str(directory / "model"), device_map=device, dtype=dtype
+        )
+
+
 class Chronos2Forecaster:
     """amazon/chronos-2 backend (zero-shot or fine-tuned)."""
 
@@ -169,16 +225,17 @@ class Chronos2Forecaster:
         has_pv: bool = True,
         available_columns: set[str] | None = None,
         calibrate: bool = True,
-    ) -> Chronos2Fitted | None:
-        """Load Chronos2 (zero-shot) for one (device|group, target).
+    ) -> Chronos2PooledFitted | None:
+        """Load Chronos2 (zero-shot) for a pooled group.
 
-        Returns ``None`` when there is too little history for one context+horizon
-        window. Pooled fine-tuning is not wired in this adapter yet — regardless
-        of ``scope``, this returns the zero-shot pipeline (see
-        :func:`_build_chronos2`). Note that a pooled fit currently applies a
-        single global target transform fit on the concatenated multi-device
-        frame (unlike the TTM adapter's per-device scaling, which is a
-        follow-up), so mixed-magnitude pools are distorted.
+        Every device in the pool keeps its own target scaler, fit on its own
+        0-70% train slice, and its own 70-85% validation band for CQR — the
+        shared checkpoint is the only thing they have in common. Devices with
+        fewer rows than one context+horizon window are dropped from the pool.
+
+        Returns ``None`` when no device qualifies. Pooled fine-tuning is not
+        wired in this adapter (see :func:`_build_chronos2`); the checkpoint is
+        always zero-shot.
         """
         cfg = settings(config)
         covariate_cols = (
@@ -189,11 +246,26 @@ class Chronos2Forecaster:
             else []
         )
         train = frame[frame[COL_TS_HOUR] <= train_end]
-        if len(train) < cfg["context_length"] + config.forecast_horizon:
+        state = build_pool_state(
+            train,
+            target,
+            train_end,
+            context_length=int(cfg["context_length"]),
+            horizon=int(config.forecast_horizon),
+        )
+        if not state.transforms:
             return None
-        transform = LogStandardizeTransform().fit(train[target].to_numpy(dtype=float))
+
         model = _build_chronos2(train, target, covariate_cols, cfg, scope, config)
-        return Chronos2Fitted(model, transform, covariate_cols, cfg["context_length"])
+        return Chronos2PooledFitted(
+            model,
+            state.transforms,
+            state.validation_windows,
+            covariate_cols,
+            int(cfg["context_length"]),
+            int(config.forecast_horizon),
+            cfg["model_id"],
+        )
 
 
 def _build_chronos2(

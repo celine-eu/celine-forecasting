@@ -21,6 +21,7 @@ from ...core.forecaster import register_backend
 from ...core.schema import COL_TS_HOUR
 from ..neural_common.covariates import resolve_covariate_columns
 from ..neural_common.persistence import NeuralFitted
+from ..neural_common.pooled import PooledZeroShotFitted, build_pool_state, single_device_id
 from ..neural_common.predict import predict_forecast_frame
 from ..neural_common.transform import LogStandardizeTransform
 from .config import settings
@@ -158,6 +159,169 @@ class TimesFM25Fitted(NeuralFitted):
         self._model_id = meta.get("model_id", "")
 
 
+class TimesFM25PooledFitted(PooledZeroShotFitted):
+    """Fleet-pattern pooled TimesFM 2.5: one checkpoint, per-device scalers."""
+
+    def __init__(
+        self,
+        model: object,
+        transforms: dict[str, LogStandardizeTransform],
+        validation_windows: dict[str, tuple[pd.Timestamp, pd.Timestamp]],
+        covariate_cols: list[str],
+        context_length: int,
+        prediction_length: int,
+        model_id: str = "",
+    ) -> None:
+        super().__init__(
+            model,
+            transforms,
+            validation_windows,
+            covariate_cols,
+            context_length,
+            prediction_length,
+            model_id,
+        )
+        # Pool-level compile flag: becomes True only once a real
+        # model.compile() has run on the shared checkpoint (see
+        # _sync_checkpoint_compiled). It is NEVER set True speculatively —
+        # doing so would SKIP a required compile, a correctness bug far worse
+        # than the wasted-compiles inefficiency this flag exists to fix.
+        self._checkpoint_compiled = False
+
+    def _make_single(self, transform: LogStandardizeTransform) -> TimesFM25Fitted:
+        """Build a single-device fitted wrapping the shared TimesFM checkpoint.
+
+        Every single wraps the SAME shared checkpoint, and ``TimesFM25Fitted``
+        guards ``compile()`` behind its own per-instance ``_compiled`` flag.
+        Compiling once is enough: seed the new single from the pool-level
+        ``_checkpoint_compiled`` flag, which :meth:`_sync_checkpoint_compiled`
+        keeps in step (and retroactively propagates to already-built singles),
+        so a pool stays correct regardless of whether singles are built lazily
+        one predict at a time, or all pre-built before any predict happens.
+
+        Args:
+            transform: The target device's own scaler, fit on its 0-70% slice.
+
+        Returns:
+            A ``TimesFM25Fitted`` wrapping the shared checkpoint and this
+            device's scaler.
+        """
+        single = TimesFM25Fitted(
+            self._model,
+            transform,
+            self._covariate_cols,
+            self._context_length,
+            self._model_id,
+        )
+        single._compiled = self._checkpoint_compiled
+        return single
+
+    def _sync_checkpoint_compiled(self, device_id: str) -> None:
+        """Propagate a just-completed compile from one single to the whole pool.
+
+        Called after that device's ``predict()`` has run. If the device's own
+        single actually compiled (``_predict_window`` sets ``_compiled = True``
+        only right after a real ``model.compile()`` call succeeds — see its
+        docstring), this flips the pool-level flag AND retroactively marks
+        every already-built single as compiled, so a single pre-built before
+        the pool's first compile does not trigger a redundant compile of its
+        own on its later first predict.
+
+        Args:
+            device_id: The device whose ``predict()`` just ran.
+        """
+        if self._checkpoint_compiled:
+            return
+        single = self._singles.get(device_id)
+        if single is not None and getattr(single, "_compiled", False):
+            self._checkpoint_compiled = True
+            for other in self._singles.values():
+                other._compiled = True  # type: ignore[attr-defined]
+
+    def predict(
+        self,
+        frame: pd.DataFrame,
+        target: str,
+        origin: pd.Timestamp,
+        config: object,
+        *,
+        weather_df: pd.DataFrame | None = None,
+        has_pv: bool = True,
+        available_columns: set[str] | None = None,
+    ) -> pd.DataFrame:
+        """Forecast one device, then sync the pool-level compile flag.
+
+        Delegates to the base pooled ``predict()`` (which builds/memoises the
+        device's single and calls its ``predict()``), then checks whether that
+        predict just compiled the shared checkpoint for the first time and, if
+        so, propagates that fact across the pool via
+        :meth:`_sync_checkpoint_compiled`.
+
+        Args:
+            frame: A single device's rows, up to and including ``origin``.
+            target: Target column to forecast.
+            origin: Forecast origin timestamp.
+            config: Pipeline/model configuration.
+            weather_df: Optional prepared weather frame.
+            has_pv: Whether the device is treated as PV-bearing.
+            available_columns: Column subset available at prediction time.
+
+        Returns:
+            The single-device forecast frame (see base class for details).
+        """
+        out = super().predict(
+            frame,
+            target,
+            origin,
+            config,
+            weather_df=weather_df,
+            has_pv=has_pv,
+            available_columns=available_columns,
+        )
+        self._sync_checkpoint_compiled(single_device_id(frame))
+        return out
+
+    def _load_model(self, directory: Path) -> None:
+        """Reload the shared checkpoint and reset the pool-level compile flag.
+
+        The reloaded checkpoint (see :meth:`_rebuild_model`) is a fresh,
+        uncompiled model object, so a stale ``True`` flag surviving reload
+        would wrongly skip the compile the new object still needs.
+
+        Args:
+            directory: The directory :meth:`load` is reconstructing from.
+        """
+        super()._load_model(directory)
+        self._checkpoint_compiled = False
+
+    def _rebuild_model(self, directory: Path) -> object:
+        """Re-pull the TimesFM checkpoint from the hub after deserialisation.
+
+        TimesFM writes no weights (see :meth:`_save_model` on the base class),
+        so the shared checkpoint is reloaded from ``model_id`` rather than from
+        ``directory``.
+
+        Args:
+            directory: Unused — TimesFM has no on-disk weights to reload.
+
+        Returns:
+            The reloaded TimesFM checkpoint, moved to CUDA when available.
+        """
+        import timesfm
+        import torch
+
+        from .config import DEFAULT_MODEL_ID
+
+        model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
+            self._model_id or DEFAULT_MODEL_ID
+        )
+        inner = model.model
+        if torch.cuda.is_available() and torch.cuda.device_count() > 0:
+            if next(inner.parameters()).device.type != "cuda":
+                inner.to("cuda")
+        return model
+
+
 class TimesFM25Forecaster:
     """google/timesfm-2.5-200m-pytorch backend (zero-shot or fine-tuned)."""
 
@@ -176,16 +340,17 @@ class TimesFM25Forecaster:
         has_pv: bool = True,
         available_columns: set[str] | None = None,
         calibrate: bool = True,
-    ) -> TimesFM25Fitted | None:
-        """Load TimesFM25 (zero-shot) for one (device|group, target).
+    ) -> TimesFM25PooledFitted | None:
+        """Load TimesFM25 (zero-shot) for a pooled group.
 
-        Returns ``None`` when there is too little history for one context+horizon
-        window. Pooled fine-tuning is not wired in this adapter yet — regardless
-        of ``scope``, this returns the zero-shot model (see
-        :func:`_build_timesfm25`). Note that a pooled fit currently applies a
-        single global target transform fit on the concatenated multi-device
-        frame (unlike the TTM adapter's per-device scaling, which is a
-        follow-up), so mixed-magnitude pools are distorted.
+        Every device in the pool keeps its own target scaler, fit on its own
+        0-70% train slice, and its own 70-85% validation band for CQR — the
+        shared checkpoint is the only thing they have in common. Devices with
+        fewer rows than one context+horizon window are dropped from the pool.
+
+        Returns ``None`` when no device qualifies. Pooled fine-tuning is not
+        wired in this adapter (see :func:`_build_timesfm25`); the checkpoint is
+        always zero-shot.
         """
         cfg = settings(config)
         covariate_cols = (
@@ -196,12 +361,25 @@ class TimesFM25Forecaster:
             else []
         )
         train = frame[frame[COL_TS_HOUR] <= train_end]
-        if len(train) < cfg["context_length"] + config.forecast_horizon:
+        state = build_pool_state(
+            train,
+            target,
+            train_end,
+            context_length=int(cfg["context_length"]),
+            horizon=int(config.forecast_horizon),
+        )
+        if not state.transforms:
             return None
-        transform = LogStandardizeTransform().fit(train[target].to_numpy(dtype=float))
+
         model = _build_timesfm25(train, target, covariate_cols, cfg, scope, config)
-        return TimesFM25Fitted(
-            model, transform, covariate_cols, cfg["context_length"], cfg["model_id"]
+        return TimesFM25PooledFitted(
+            model,
+            state.transforms,
+            state.validation_windows,
+            covariate_cols,
+            int(cfg["context_length"]),
+            int(config.forecast_horizon),
+            cfg["model_id"],
         )
 
 
