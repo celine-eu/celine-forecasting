@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated
@@ -25,7 +26,7 @@ from typing import Annotated
 import pandas as pd
 import typer
 
-from .core.cleaning import build_processed_hourly
+from .core.cleaning import build_processed_hourly, prepare_weather
 from .core.config import ForecastConfig, load_config
 from .core.io import load_meters, load_weather
 from .core.schema import COL_DEVICE_ID, COL_GRID_EXPORT, COL_GRID_IMPORT, COL_TS_HOUR
@@ -241,15 +242,23 @@ def _parse_candidate_tokens(candidates: str) -> list[tuple[str, str, str]]:
 
 
 def _benchmark_experiment_name(data_end: pd.Timestamp) -> str:
-    """Deterministic MLflow experiment name for a benchmark run.
+    """MLflow experiment name for a benchmark run.
+
+    Defaults to a deterministic, data-derived name so a given dataset always
+    maps to the same experiment. Set ``CELINE_BENCHMARK_EXPERIMENT`` to override
+    it explicitly — needed when two datasets share an end date (e.g. a full-fleet
+    run and a mature-cohort run both ending on the same day) and must not collide
+    in the same experiment.
 
     Args:
-        data_end: Max ``ts_hour`` of the loaded data. Never wall-clock time,
-            so a given dataset always maps to the same experiment name.
+        data_end: Max ``ts_hour`` of the loaded data. Never wall-clock time.
 
     Returns:
-        ``benchmark-meters-{data_end:%Y%m%d}``.
+        ``$CELINE_BENCHMARK_EXPERIMENT`` if set, else ``benchmark-meters-{date}``.
     """
+    override = os.environ.get("CELINE_BENCHMARK_EXPERIMENT")
+    if override:
+        return override
     return f"benchmark-meters-{data_end:%Y%m%d}"
 
 
@@ -288,7 +297,11 @@ def benchmark(
     data_end = processed[COL_TS_HOUR].max()
     experiment_name = _benchmark_experiment_name(data_end)
 
-    suite = BenchmarkSuite("meters", processed, cfg, weather_df=df_weather)
+    # BenchmarkSuite expects a UTC-indexed weather frame (backends reindex it to
+    # forecast hours); prepare it here as the run/serve paths do — passing the raw
+    # frame makes LightGBM's reindex fail on an int64 vs datetime index mismatch.
+    weather_prepared = prepare_weather(df_weather, cfg) if df_weather is not None else None
+    suite = BenchmarkSuite("meters", processed, cfg, weather_df=weather_prepared)
     for name, backend, scope in tokens:
         suite.add_candidate(name, backend, scope=scope)
 

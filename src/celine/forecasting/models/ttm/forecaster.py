@@ -653,6 +653,29 @@ def _fit_pooled(
         model_frame = _build_model_frame(device_rows, target)
         tsp = _build_preprocessor(target, covariate_cols, settings, config)
         split = _split_indices(len(model_frame))
+
+        # A device can clear full-history eligibility yet have NO signal in an
+        # earlier origin's train window (e.g. a prosumer that only began
+        # exporting recently). Its target — or a covariate — is then all-NaN on
+        # the train split, and the TSP scaler raises "group with a column of all
+        # missing values", crashing the whole pooled fit. Skip such a device for
+        # this origin, mirroring the per-device path's graceful skip.
+        train_start, train_end = split["train"]
+        train_slice = model_frame.iloc[train_start:train_end]
+        degenerate = [
+            col
+            for col in (target, *covariate_cols)
+            if col in train_slice.columns and train_slice[col].isna().all()
+        ]
+        if degenerate:
+            logger.warning(
+                "Pooled TTM: device %s has all-NaN train-split column(s) %s — "
+                "dropped from the pool for this origin",
+                device_id,
+                degenerate,
+            )
+            continue
+
         transform = LogStandardizeTransform().fit(
             device_rows[target].to_numpy(dtype=float)
         )

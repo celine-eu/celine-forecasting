@@ -130,12 +130,26 @@ def build_pool_state(
             dropped.append(device_id)
             continue
 
+        # A device can clear full-history eligibility yet have NO signal in an
+        # earlier origin's train window (e.g. a prosumer that only began
+        # exporting recently), leaving the target all-NaN on the train slice.
+        # Fitting the scaler on that yields NaN stats that poison the whole
+        # pool, so drop the device for this origin — the per-device path skips
+        # such empty windows too.
+        target_train = rows[target].to_numpy(dtype=float)[train_start:train_stop]
+        if np.all(np.isnan(target_train)):
+            logger.warning(
+                "Pooled fit: device %s has an all-NaN target on its train slice "
+                "(no signal in this origin's window) — dropped from the pool",
+                device_id,
+            )
+            dropped.append(device_id)
+            continue
+
         # The scaler sees the train slice ONLY: this is the model's sole scaler
         # for these backends, so letting it see the 70-85% band would make the
         # CQR offsets calibrated on that band optimistic.
-        transforms[device_id] = LogStandardizeTransform().fit(
-            rows[target].to_numpy(dtype=float)[train_start:train_stop]
-        )
+        transforms[device_id] = LogStandardizeTransform().fit(target_train)
 
         timestamps = rows[timestamp_column].to_numpy()
         validation_windows[device_id] = (
