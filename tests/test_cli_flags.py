@@ -17,3 +17,15 @@ def test_train_help_lists_model_and_scope() -> None:
     assert result.exit_code == 0
     assert "--model" in result.output
     assert "--scope" in result.output
+
+
+def test_run_help_lists_save_model() -> None:
+    result = runner.invoke(app, ["run", "--help"])
+    assert result.exit_code == 0
+    assert "--save-model" in result.output
+
+
+def test_train_help_lists_save_model() -> None:
+    result = runner.invoke(app, ["train", "--help"])
+    assert result.exit_code == 0
+    assert "--save-model" in result.output

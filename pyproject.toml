@@ -54,6 +54,10 @@ conflicts = [
     ],
 ]
 default-groups = []
+# uni2ts 2.0.0 caps torch<2.5, but torch 2.4.x has no sm_120 kernels and cannot
+# run on Blackwell GPUs (RTX 5060). Override the cap so the moirai group resolves
+# the same Blackwell-capable torch the other neural groups already use.
+override-dependencies = ["torch>=2.7"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/celine"]

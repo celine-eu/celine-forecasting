@@ -337,6 +337,12 @@ def run(
     scope: Scope = ScopeEnum.per_device,
     full_retrain: Annotated[bool, typer.Option(help="Force full retrain from scratch")] = False,
     jobs: Annotated[int | None, typer.Option("-j", "--jobs", help="Parallel devices")] = None,
+    save_model: Annotated[
+        bool,
+        typer.Option(
+            help="Also save the servable model under <output>/model/ (works with tracking off)"
+        ),
+    ] = False,
 ) -> None:
     """Daily run: incremental retrain + forecast (full retrain if no prior model)."""
     _setup_logging(verbose)
@@ -353,7 +359,7 @@ def run(
             df_meters, cfg, df_weather=df_weather,
             do_cv=cv, do_backtest=False, full_retrain=full_retrain,
             n_jobs=jobs, output_dir=str(output),
-            model=model, scope=scope.value,
+            model=model, scope=scope.value, save_model=save_model,
         )
     except InsufficientDataError as exc:
         typer.echo(str(exc), err=True)
@@ -416,6 +422,12 @@ def train(
     scope: Scope = ScopeEnum.per_device,
     full_retrain: Annotated[bool, typer.Option(help="Force full retrain from scratch")] = False,
     jobs: Annotated[int | None, typer.Option("-j", "--jobs", help="Parallel devices")] = None,
+    save_model: Annotated[
+        bool,
+        typer.Option(
+            help="Also save the servable model under <output>/model/ (works with tracking off)"
+        ),
+    ] = False,
 ) -> None:
     """Train models and write forecasts."""
     _setup_logging(verbose)
@@ -432,7 +444,7 @@ def train(
             df_meters, cfg, df_weather=df_weather,
             do_cv=not no_cv, do_backtest=backtest, full_retrain=full_retrain,
             n_jobs=jobs, output_dir=str(output),
-            model=model, scope=scope.value,
+            model=model, scope=scope.value, save_model=save_model,
         )
     except InsufficientDataError as exc:
         typer.echo(str(exc), err=True)

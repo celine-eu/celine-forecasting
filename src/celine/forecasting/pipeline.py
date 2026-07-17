@@ -195,6 +195,7 @@ def train_pipeline(
     output_dir: str | Path | None = None,
     model: str = "lightgbm",
     scope: str = "per_device",
+    save_model: bool = False,
 ) -> PipelineResult:
     """Run the full forecasting pipeline.
 
@@ -209,6 +210,10 @@ def train_pipeline(
         model: Backend name resolved via :func:`get_forecaster`.
         scope: Fitting scope passed to the backend (``"per_device"`` or
             ``"pooled"``).
+        save_model: If true (and ``output_dir`` is given), also save the fitted
+            servable model under ``<output_dir>/model/``. Works with tracking
+            disabled — the escape hatch for keeping fine-tuned neural weights
+            that would otherwise persist only via MLflow upload.
 
     Returns:
         A populated :class:`PipelineResult`.
@@ -360,6 +365,17 @@ def train_pipeline(
             per_device_csv = Path(output_dir) / "model_performance.csv"
             if per_device_csv.exists():
                 tracker.log_artifact(per_device_csv)
+
+    # Local servable-model save is independent of the tracker so it works with
+    # tracking disabled — the whole point of the feature.
+    if save_model and output_dir is not None:
+        _save_model_locally(
+            result.trained_models,
+            config,
+            output_dir,
+            export_eligible=export_eligible,
+            model_name=model,
+        )
 
     return result
 
@@ -526,6 +542,57 @@ def _run_params(config: ForecastConfig, devices: list[str]) -> dict[str, Any]:
         "cqr_target_coverage": config.cqr.get("target_coverage"),
         **{f"lgb_{k}": v for k, v in config.lgb_params.items()},
     }
+
+
+def _dir_size_mb(directory: Path) -> float:
+    """Return the total size of ``directory`` in megabytes."""
+    total_bytes = sum(f.stat().st_size for f in directory.rglob("*") if f.is_file())
+    return total_bytes / (1024 * 1024)
+
+
+def _save_model_locally(
+    trained_models: dict[str, Any],
+    config: ForecastConfig,
+    output_dir: str | Path,
+    *,
+    export_eligible: set[str],
+    model_name: str,
+) -> None:
+    """Save the fitted ensemble as a servable model under ``<output_dir>/model/``.
+
+    Reuses the same pyfunc builder MLflow serving uses, so the local directory is
+    a genuine reloadable/servable model (fine-tuned neural weights included), not
+    a bespoke format. Requires only the ``mlflow`` library — no tracking server.
+
+    Args:
+        trained_models: ``{device: {target: FittedForecaster}}`` bundle.
+        config: Pipeline configuration (persisted with the model).
+        output_dir: Run output directory; the model is written to its
+            ``model/`` subdirectory.
+        export_eligible: PV-eligible device ids (needed for inference).
+        model_name: Backend name persisted into the model metadata.
+    """
+    if not trained_models:
+        logger.warning("No trained models to save — skipping local model save")
+        return
+    try:
+        from .core.serving import save_forecast_model
+    except ImportError:
+        logger.warning(
+            "mlflow not installed — cannot save a servable model locally; "
+            "install `celine-meter-forecasting[mlflow]` to enable --save-model"
+        )
+        return
+
+    model_dir = Path(output_dir) / "model"
+    save_forecast_model(
+        trained_models,
+        config,
+        model_dir,
+        export_eligible=export_eligible,
+        model_name=model_name,
+    )
+    logger.info("Saved servable model to %s (~%.1f MB)", model_dir, _dir_size_mb(model_dir))
 
 
 def _write_outputs(result: PipelineResult, processed: pd.DataFrame, output_dir: str | Path) -> None:

@@ -149,6 +149,54 @@ class MeterForecastModel(mlflow.pyfunc.PythonModel):
         return pd.DataFrame(rows)
 
 
+def _write_model_artifacts(
+    tmp_path: Path,
+    trained_models: dict,
+    config: Any,
+    *,
+    export_eligible: set[str],
+    model_name: str,
+) -> dict[str, str]:
+    """Serialise the ensemble, config and metadata into ``tmp_path``.
+
+    This is the single builder shared by the MLflow-logging path
+    (:func:`log_forecast_model`) and the local-save path
+    (:func:`save_forecast_model`), so a locally saved model is byte-for-byte the
+    same servable bundle MLflow would have uploaded. The neural backends'
+    fine-tuned weights ride along inside ``trained_models`` via their pickling
+    hooks — ``joblib.dump`` here exercises exactly that path.
+
+    Args:
+        tmp_path: Directory to write the three artefact files into.
+        trained_models: ``{device: {target: FittedForecaster}}`` bundle.
+        config: Pipeline configuration (its ``raw`` dict is persisted verbatim).
+        export_eligible: PV-eligible device ids (needed at inference time).
+        model_name: Backend name persisted into the model metadata.
+
+    Returns:
+        The ``{"bundle": ..., "config": ..., "metadata": ...}`` artifact-path
+        mapping expected by MLflow's ``python_model`` ``artifacts`` argument.
+    """
+    import yaml
+
+    bundle_path = tmp_path / _BUNDLE_FILE
+    config_path = tmp_path / _CONFIG_FILE
+    meta_path = tmp_path / _META_FILE
+
+    joblib.dump(trained_models, bundle_path, compress=5)
+    with open(config_path, "w", encoding="utf-8") as handle:
+        yaml.safe_dump(config.raw, handle, sort_keys=False)
+    with open(meta_path, "w", encoding="utf-8") as handle:
+        meta = {"export_eligible": sorted(export_eligible), "model_name": model_name}
+        json.dump(meta, handle)
+
+    return {
+        "bundle": str(bundle_path),
+        "config": str(config_path),
+        "metadata": str(meta_path),
+    }
+
+
 def log_forecast_model(
     trained_models: dict,
     config: Any,
@@ -173,29 +221,64 @@ def log_forecast_model(
     """
     import tempfile
 
-    import yaml
-
     with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-        bundle_path = tmp_path / _BUNDLE_FILE
-        config_path = tmp_path / _CONFIG_FILE
-        meta_path = tmp_path / _META_FILE
-
-        joblib.dump(trained_models, bundle_path, compress=5)
-        with open(config_path, "w", encoding="utf-8") as handle:
-            yaml.safe_dump(config.raw, handle, sort_keys=False)
-        with open(meta_path, "w", encoding="utf-8") as handle:
-            meta = {"export_eligible": sorted(export_eligible), "model_name": model_name}
-            json.dump(meta, handle)
-
+        artifacts = _write_model_artifacts(
+            Path(tmp), trained_models, config,
+            export_eligible=export_eligible, model_name=model_name,
+        )
         return mlflow.pyfunc.log_model(
             name="model",
             python_model=MeterForecastModel(),
-            artifacts={
-                "bundle": str(bundle_path),
-                "config": str(config_path),
-                "metadata": str(meta_path),
-            },
+            artifacts=artifacts,
             signature=_io_signature(),
             registered_model_name=registered_name if register else None,
         )
+
+
+def save_forecast_model(
+    trained_models: dict,
+    config: Any,
+    dst: str | Path,
+    *,
+    export_eligible: set[str],
+    model_name: str = "lightgbm",
+) -> Path:
+    """Save the trained ensemble as a servable pyfunc model directory on disk.
+
+    Produces the same reloadable layout as :func:`log_forecast_model` (an
+    ``mlflow.pyfunc`` model directory), but targets a caller-supplied local path
+    instead of the active MLflow run — so the fitted (and, for neural backends,
+    fine-tuned) weights survive even when tracking is disabled. Reload it with
+    ``mlflow.pyfunc.load_model(str(dst))``. Requires only the ``mlflow`` library;
+    no tracking server is contacted.
+
+    Args:
+        trained_models: ``{device: {target: FittedForecaster}}`` bundle.
+        config: Pipeline configuration (its ``raw`` dict is persisted verbatim).
+        dst: Destination directory. Overwritten if it already exists.
+        export_eligible: PV-eligible device ids (needed at inference time).
+        model_name: Backend name persisted into the model metadata.
+
+    Returns:
+        The destination :class:`~pathlib.Path`.
+    """
+    import shutil
+    import tempfile
+
+    dst_path = Path(dst)
+    if dst_path.exists():
+        shutil.rmtree(dst_path)
+    dst_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with tempfile.TemporaryDirectory() as tmp:
+        artifacts = _write_model_artifacts(
+            Path(tmp), trained_models, config,
+            export_eligible=export_eligible, model_name=model_name,
+        )
+        mlflow.pyfunc.save_model(
+            path=str(dst_path),
+            python_model=MeterForecastModel(),
+            artifacts=artifacts,
+            signature=_io_signature(),
+        )
+    return dst_path
