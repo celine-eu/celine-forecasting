@@ -102,9 +102,7 @@ class Chronos2Fitted(NeuralFitted):
             future = np.asarray(future_cov, dtype=np.float32)
             model_input = {
                 "target": context,
-                "past_covariates": {
-                    col: past[:, i] for i, col in enumerate(self._covariate_cols)
-                },
+                "past_covariates": {col: past[:, i] for i, col in enumerate(self._covariate_cols)},
                 "future_covariates": {
                     col: future[:, i] for i, col in enumerate(self._covariate_cols)
                 },
@@ -233,9 +231,10 @@ class Chronos2Forecaster:
         shared checkpoint is the only thing they have in common. Devices with
         fewer rows than one context+horizon window are dropped from the pool.
 
-        Returns ``None`` when no device qualifies. Pooled fine-tuning is not
-        wired in this adapter (see :func:`_build_chronos2`); the checkpoint is
-        always zero-shot.
+        Returns ``None`` when no device qualifies. When ``backends.chronos2.
+        finetune`` is set, the shared checkpoint is fine-tuned on the pool via
+        :func:`_build_chronos2` (each device's 0-70% slice, 70-85% as validation);
+        otherwise it is zero-shot.
         """
         cfg = settings(config)
         covariate_cols = (
@@ -256,7 +255,7 @@ class Chronos2Forecaster:
         if not state.transforms:
             return None
 
-        model = _build_chronos2(train, target, covariate_cols, cfg, scope, config)
+        model = _build_chronos2(train, target, covariate_cols, cfg, scope, config, state.transforms)
         return Chronos2PooledFitted(
             model,
             state.transforms,
@@ -275,38 +274,53 @@ def _build_chronos2(
     cfg: dict,
     scope: str,
     config: ForecastConfig,
+    transforms: dict[str, LogStandardizeTransform] | None = None,
 ) -> object:
-    """Load the Chronos-2 pipeline (zero-shot) on GPU when available.
+    """Load the Chronos-2 pipeline (zero-shot, then optionally fine-tuned).
 
     Faithful port of ``chronos2/runner.load_pipeline``: GPU + bfloat16 when CUDA
-    is present, else CPU + float32. In-adapter fine-tuning is not wired (the IBM
-    reference fine-tunes via a separate pooled-benchmark driver using
-    ``Chronos2Pipeline.fit``); when ``cfg['finetune']`` is set this logs a
-    warning and returns the zero-shot pipeline.
+    is present, else CPU + float32. When ``cfg['finetune']`` is set, the loaded
+    zero-shot pipeline is fine-tuned on the pool via
+    :func:`...chronos2.finetune.finetune` (LoRA by default; each device's 0-70%
+    slice for training, 70-85% as validation) and the *fine-tuned* pipeline is
+    returned so it flows into ``Chronos2PooledFitted`` and persistence.
 
     Args:
-        train: Training rows (unused for zero-shot).
-        target: Target column name (unused for zero-shot).
-        covariate_cols: Covariate columns (used at predict time, not load).
+        train: Training rows, already truncated to ``train_end``.
+        target: Target column name.
+        covariate_cols: Covariate columns (fine-tune conditioning + predict time).
         cfg: Resolved Chronos2 settings.
         scope: ``"per_device"`` or ``"pooled"`` (unused — one shared checkpoint).
-        config: Pipeline configuration (unused for zero-shot).
+        config: Pipeline configuration (``forecast_horizon``).
+        transforms: Per-device scalers from the pool state, required when
+            ``cfg['finetune']`` is set (each fit on its device's 0-70% slice).
 
     Returns:
-        The loaded ``Chronos2Pipeline``.
+        The loaded ``Chronos2Pipeline`` (fine-tuned when requested).
     """
     import torch
     from chronos import Chronos2Pipeline
 
-    if cfg["finetune"]:
-        logger.warning(
-            "chronos2 in-adapter fine-tune is not wired; using the zero-shot "
-            "pipeline. Fine-tune via the IBM benchmark driver (Chronos2Pipeline.fit)."
-        )
-
     device = "cuda" if torch.cuda.is_available() else "cpu"
     dtype = torch.bfloat16 if device == "cuda" else torch.float32
-    return Chronos2Pipeline.from_pretrained(cfg["model_id"], device_map=device, dtype=dtype)
+    pipeline = Chronos2Pipeline.from_pretrained(cfg["model_id"], device_map=device, dtype=dtype)
+
+    if cfg["finetune"]:
+        from .finetune import finetune as finetune_chronos2
+
+        profile = "gpu" if torch.cuda.is_available() else "cpu"
+        pipeline = finetune_chronos2(
+            pipeline,
+            train,
+            target,
+            covariate_cols,
+            transforms or {},
+            context_length=int(cfg["context_length"]),
+            horizon=int(config.forecast_horizon),
+            profile=profile,
+        )
+
+    return pipeline
 
 
 register_backend(Chronos2Forecaster, available=_AVAILABLE)

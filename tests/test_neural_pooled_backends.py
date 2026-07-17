@@ -68,6 +68,8 @@ BACKEND_INFO = {
         "pooled_cls": "TimesFM25PooledFitted",
         "build_fn": "_build_timesfm25",
         "has_model_id": True,
+        # _build_timesfm25 returns (model, finetuned) rather than the bare model.
+        "build_result": ("sentinel-model", False),
     },
 }
 
@@ -153,9 +155,7 @@ def test_pooled_class_subclasses_the_shared_base(backend: str, pooled_cls: str) 
 @pytest.mark.parametrize(("backend", "pooled_cls"), sorted(BACKENDS.items()))
 def test_pooled_class_implements_both_hooks(backend: str, pooled_cls: str) -> None:
     methods = {
-        n.name
-        for n in _classdef(backend, pooled_cls).body
-        if isinstance(n, ast.FunctionDef)
+        n.name for n in _classdef(backend, pooled_cls).body if isinstance(n, ast.FunctionDef)
     }
     assert {"_make_single", "_rebuild_model"} <= methods
 
@@ -245,7 +245,8 @@ def test_fit_pooled_dispatch_is_behaviourally_correct(
     info = BACKEND_INFO[backend]
     module = importlib.import_module(info["module"])
     forecaster_cls = getattr(module, info["forecaster_cls"])
-    monkeypatch.setattr(module, info["build_fn"], lambda *args, **kwargs: "sentinel-model")
+    build_result = info.get("build_result", "sentinel-model")
+    monkeypatch.setattr(module, info["build_fn"], lambda *args, **kwargs: build_result)
 
     frame = pd.concat(
         [
@@ -287,7 +288,8 @@ def test_fit_pooled_returns_none_when_every_device_is_too_short(
     info = BACKEND_INFO[backend]
     module = importlib.import_module(info["module"])
     forecaster_cls = getattr(module, info["forecaster_cls"])
-    monkeypatch.setattr(module, info["build_fn"], lambda *args, **kwargs: "sentinel-model")
+    build_result = info.get("build_result", "sentinel-model")
+    monkeypatch.setattr(module, info["build_fn"], lambda *args, **kwargs: build_result)
 
     frame = pd.concat(
         [
@@ -331,9 +333,7 @@ class _RecordingPipeline:
 
 
 @pytest.mark.parametrize("backend", ["chronos2", "chronos_bolt"])
-def test_save_model_writes_real_weights_for_chronos_backends(
-    backend: str, tmp_path: Path
-) -> None:
+def test_save_model_writes_real_weights_for_chronos_backends(backend: str, tmp_path: Path) -> None:
     """Without this override, NeuralFitted.__getstate__ blobs only FILES, so
     the inherited mkdir-only default yields an empty dir, the pickle carries
     no weights, and _rebuild_model's from_pretrained then hits a nonexistent
@@ -352,13 +352,13 @@ def test_save_model_writes_real_weights_for_chronos_backends(
     assert (tmp_path / "model" / "weights.bin").read_bytes() == b"fake-weights"
 
 
-@pytest.mark.parametrize("backend", ["moirai", "timesfm25"])
-def test_save_model_writes_no_weights_for_hub_reload_backends(
-    backend: str, tmp_path: Path
-) -> None:
-    """moirai/timesfm25 reload from model_id, not from disk. ``object()`` has
-    no ``.model.save_pretrained``: if _save_model tried to reach into it the
-    way Chronos does, this would raise AttributeError instead of passing."""
+@pytest.mark.parametrize("backend", ["timesfm25"])
+def test_save_model_writes_no_weights_for_hub_reload_backends(backend: str, tmp_path: Path) -> None:
+    """A ZERO-SHOT timesfm25 pool reloads from model_id, not from disk (only a
+    fine-tuned pool persists weights; see test_timesfm25_finetune.py). ``object()``
+    has no ``.model.save_pretrained``: if _save_model tried to reach into it the
+    way Chronos does, this would raise AttributeError instead of passing.
+    (moirai now always persists weights — covered in test_moirai_finetune.py.)"""
     info = BACKEND_INFO[backend]
     module = importlib.import_module(info["module"])
     pooled_cls = getattr(module, info["pooled_cls"])

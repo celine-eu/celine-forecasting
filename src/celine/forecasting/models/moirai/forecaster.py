@@ -24,6 +24,7 @@ from ..neural_common.persistence import NeuralFitted
 from ..neural_common.pooled import PooledZeroShotFitted, build_pool_state
 from ..neural_common.predict import predict_forecast_frame
 from ..neural_common.transform import LogStandardizeTransform
+from . import finetune as moirai_finetune
 from .config import settings
 
 logger = logging.getLogger(__name__)
@@ -38,8 +39,10 @@ _FREQ = "h"
 _AVAILABLE = importlib.util.find_spec("uni2ts") is not None
 
 
-def _make_predictor(n_cov: int, context_length: int, horizon: int, model_id: str) -> object:
-    """Build a GluonTS predictor wrapping zero-shot ``MoiraiForecast``.
+def _make_predictor(
+    n_cov: int, context_length: int, horizon: int, model_id: str, module: object | None = None
+) -> object:
+    """Build a GluonTS predictor wrapping ``MoiraiForecast``.
 
     Faithful port of ``moirai/runner.build_predictor`` for the hourly geometry.
 
@@ -47,7 +50,9 @@ def _make_predictor(n_cov: int, context_length: int, horizon: int, model_id: str
         n_cov: Number of known-future covariates (0 for univariate).
         context_length: Effective context length.
         horizon: Forecast horizon in steps.
-        model_id: HuggingFace model ID.
+        model_id: HuggingFace model ID (used when ``module`` is None).
+        module: An already-loaded (possibly fine-tuned) ``MoiraiModule``; when
+            given, ``model_id`` is not consulted.
 
     Returns:
         A GluonTS ``PyTorchPredictor``.
@@ -56,7 +61,8 @@ def _make_predictor(n_cov: int, context_length: int, horizon: int, model_id: str
     from uni2ts.model.moirai import MoiraiForecast, MoiraiModule
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    module = MoiraiModule.from_pretrained(model_id)
+    if module is None:
+        module = MoiraiModule.from_pretrained(model_id)
     model = MoiraiForecast(
         module=module,
         prediction_length=horizon,
@@ -174,7 +180,9 @@ class MoiraiFitted(NeuralFitted):
         from .config import DEFAULT_MODEL_ID
 
         self._model = _make_predictor(
-            len(self._covariate_cols), self._context_length, self._prediction_length,
+            len(self._covariate_cols),
+            self._context_length,
+            self._prediction_length,
             model_id=self._model_id or DEFAULT_MODEL_ID,
         )
 
@@ -219,27 +227,59 @@ class MoiraiPooledFitted(PooledZeroShotFitted):
             self._model_id,
         )
 
-    def _rebuild_model(self, directory: Path) -> object:
-        """Re-pull the Moirai checkpoint from the hub after deserialisation.
+    def _save_model(self, directory: Path) -> None:
+        """Persist the shared Moirai weights, overriding the base no-op.
 
-        Moirai writes no weights (see :meth:`_save_model` on the base class),
-        so the shared predictor is rebuilt from ``model_id`` rather than from
-        ``directory``.
+        The base class writes no weights and ``_rebuild_model`` used to re-pull
+        from the hub, which silently DROPPED fine-tuned weights after an MLflow
+        save/load round-trip. ``MoiraiModule`` subclasses
+        ``huggingface_hub.PyTorchModelHubMixin``, so ``save_pretrained`` writes
+        ``config.json`` + safetensors that :meth:`_rebuild_model` reloads. The
+        module lives at ``predictor.prediction_net.module`` (the GluonTS
+        ``PyTorchPredictor`` wraps ``MoiraiForecast``, which wraps the module).
 
         Args:
-            directory: Unused — Moirai has no on-disk weights to reload.
+            directory: Directory :meth:`save` is writing into; weights land
+                under ``directory/model``.
+        """
+        module = self._model.prediction_net.module  # type: ignore[attr-defined]
+        module.save_pretrained(directory / "model")
+
+    def _rebuild_model(self, directory: Path) -> object:
+        """Reload the shared Moirai predictor from the weights on disk.
+
+        Rebuilds the ``MoiraiForecast`` architecture around the saved
+        ``MoiraiModule`` weights so fine-tuned checkpoints round-trip through
+        MLflow. Bundles written before weights were persisted (an empty
+        ``model`` dir) fall back to re-pulling ``model_id`` from the hub —
+        the old zero-shot behaviour.
+
+        Args:
+            directory: The directory :meth:`_save_model` wrote weights into.
 
         Returns:
             The reloaded GluonTS ``PyTorchPredictor``.
         """
-        # Moirai writes no weights: re-pull the checkpoint from the hub.
         from .config import DEFAULT_MODEL_ID
 
+        model_dir = directory / "model"
+        module = None
+        if (model_dir / "config.json").exists():
+            from uni2ts.model.moirai import MoiraiModule
+
+            module = MoiraiModule.from_pretrained(str(model_dir))
+        else:
+            logger.warning(
+                "moirai: no saved weights under %s (pre-persistence bundle) — "
+                "re-pulling the zero-shot checkpoint from the hub",
+                model_dir,
+            )
         return _make_predictor(
             len(self._covariate_cols),
             self._context_length,
             self._prediction_length,
             model_id=self._model_id or DEFAULT_MODEL_ID,
+            module=module,
         )
 
 
@@ -269,9 +309,11 @@ class MoiraiForecaster:
         shared checkpoint is the only thing they have in common. Devices with
         fewer rows than one context+horizon window are dropped from the pool.
 
-        Returns ``None`` when no device qualifies. Pooled fine-tuning is not
-        wired in this adapter (see :func:`_build_moirai`); the checkpoint is
-        always zero-shot.
+        Returns ``None`` when no device qualifies. When ``backends.moirai.
+        finetune`` is set, the shared checkpoint is fine-tuned in-process on the
+        pool devices' scaled 0-70% slices (see :mod:`.finetune`); note that
+        fine-tuned Moirai weights inherit the CC-BY-NC-4.0 non-commercial
+        license of the base checkpoint.
         """
         cfg = settings(config)
         covariate_cols = (
@@ -292,7 +334,7 @@ class MoiraiForecaster:
         if not state.transforms:
             return None
 
-        model = _build_moirai(train, target, covariate_cols, cfg, scope, config)
+        model = _build_moirai(train, target, covariate_cols, cfg, scope, config, state.transforms)
         return MoiraiPooledFitted(
             model,
             state.transforms,
@@ -311,33 +353,58 @@ def _build_moirai(
     cfg: dict,
     scope: str,
     config: ForecastConfig,
+    transforms: dict[str, LogStandardizeTransform],
 ) -> object:
-    """Build the zero-shot Moirai GluonTS predictor on GPU when available.
+    """Build the Moirai GluonTS predictor (zero-shot or fine-tuned).
 
-    Faithful port of ``moirai/runner`` (``load_module`` + ``build_predictor``).
-    In-adapter fine-tuning is not wired (the IBM reference evaluates Moirai
-    zero-shot only); when ``cfg['finetune']`` is set this logs a warning and
-    returns the zero-shot predictor.
+    Zero-shot is a faithful port of ``moirai/runner`` (``load_module`` +
+    ``build_predictor``). When ``cfg['finetune']`` is set, the hub checkpoint
+    is fine-tuned in-process on the pool's scaled 0-70% train slices via
+    :func:`.finetune.finetune` (uni2ts ``MoiraiFinetune`` + Lightning), and the
+    predictor is built around the fine-tuned module.
 
     Args:
-        train: Training rows (unused — zero-shot).
-        target: Target column name (unused).
+        train: Training rows up to ``train_end`` (used by fine-tuning only).
+        target: Target column name (used by fine-tuning only).
         covariate_cols: Known-future covariate columns (sets ``feat_dynamic_real_dim``).
         cfg: Resolved Moirai settings.
         scope: ``"per_device"`` or ``"pooled"`` (unused — one shared checkpoint).
         config: Pipeline configuration (``forecast_horizon``).
+        transforms: Per-device pool scalers from ``build_pool_state`` (define
+            fine-tune pool membership; unused zero-shot).
 
     Returns:
         A GluonTS ``PyTorchPredictor``.
     """
-    if cfg["finetune"]:
-        logger.warning(
-            "moirai in-adapter fine-tune is not wired (the IBM reference is "
-            "zero-shot only); using the zero-shot predictor."
+    context_length = int(cfg["context_length"])
+    horizon = int(config.forecast_horizon)
+    if not cfg["finetune"]:
+        return _make_predictor(
+            len(covariate_cols), context_length, horizon, model_id=cfg["model_id"]
         )
+
+    logger.warning(
+        "moirai fine-tune ENABLED: Salesforce Moirai-1.x-R weights are "
+        "CC-BY-NC-4.0 (non-commercial); the fine-tuned checkpoint is a "
+        "derivative work and INHERITS the non-commercial restriction."
+    )
+    import torch
+    from uni2ts.model.moirai import MoiraiModule
+
+    module = MoiraiModule.from_pretrained(cfg["model_id"])
+    profile = "gpu" if torch.cuda.is_available() else "cpu"
+    module = moirai_finetune.finetune(
+        module,
+        train,
+        target,
+        covariate_cols,
+        transforms,
+        context_length=context_length,
+        horizon=horizon,
+        profile=profile,
+    )
     return _make_predictor(
-        len(covariate_cols), int(cfg["context_length"]), int(config.forecast_horizon),
-        model_id=cfg["model_id"],
+        len(covariate_cols), context_length, horizon, model_id=cfg["model_id"], module=module
     )
 
 

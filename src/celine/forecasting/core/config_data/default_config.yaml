@@ -243,9 +243,14 @@ backends:
     covariates: false             # Chronos-Bolt is univariate (no covariates)
   timesfm25:
     model_id: google/timesfm-2.5-200m-pytorch  # 200M params, single variant
-    finetune: false
+    finetune: false               # bespoke torch loop (top blocks + heads)
     context_length: 512
     covariates: true
+    # Optional fine-tune overrides (profile defaults in models/timesfm25/finetune.py apply when unset):
+    # finetune_epochs: 10
+    # finetune_batch_size: 16
+    # finetune_trainable_layers: 2
+    # finetune_stride: 16
   moirai:
     model_id: Salesforce/moirai-1.0-R-small  # small (safe for 12GB GPU); -base or -large for bigger GPUs
     finetune: false

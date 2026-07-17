@@ -162,6 +162,14 @@ class TimesFM25Fitted(NeuralFitted):
 class TimesFM25PooledFitted(PooledZeroShotFitted):
     """Fleet-pattern pooled TimesFM 2.5: one checkpoint, per-device scalers."""
 
+    # Weights file written under ``directory/model`` when the checkpoint was
+    # fine-tuned (see :meth:`_save_model`).
+    _FINETUNED_WEIGHTS = "finetuned.safetensors"
+
+    # Default so a load path (``cls.__new__``) that predates the flag, or a
+    # zero-shot pool, is treated as zero-shot before ``_restore_meta`` runs.
+    _finetuned: bool = False
+
     def __init__(
         self,
         model: object,
@@ -187,6 +195,11 @@ class TimesFM25PooledFitted(PooledZeroShotFitted):
         # doing so would SKIP a required compile, a correctness bug far worse
         # than the wasted-compiles inefficiency this flag exists to fix.
         self._checkpoint_compiled = False
+        # Whether the shared checkpoint carries fine-tuned weights. Set by
+        # ``fit`` after ``_build_timesfm25``; drives persistence (see
+        # ``_save_model``/``_rebuild_model``). Zero-shot pools leave it False and
+        # keep the reload-from-model_id path unchanged.
+        self._finetuned = False
 
     def _make_single(self, transform: LogStandardizeTransform) -> TimesFM25Fitted:
         """Build a single-device fitted wrapping the shared TimesFM checkpoint.
@@ -294,32 +307,82 @@ class TimesFM25PooledFitted(PooledZeroShotFitted):
         super()._load_model(directory)
         self._checkpoint_compiled = False
 
-    def _rebuild_model(self, directory: Path) -> object:
-        """Re-pull the TimesFM checkpoint from the hub after deserialisation.
+    def _save_model(self, directory: Path) -> None:
+        """Persist fine-tuned weights; write nothing for a zero-shot pool.
 
-        TimesFM writes no weights (see :meth:`_save_model` on the base class),
-        so the shared checkpoint is reloaded from ``model_id`` rather than from
-        ``directory``.
+        Zero-shot pools reload from ``model_id`` on load (base-class behaviour),
+        so only the empty ``directory/model`` marker is written. A **fine-tuned**
+        pool must persist its trained weights or ``_rebuild_model`` would rebuild
+        the base checkpoint and silently drop the fine-tuning — the load-bearing
+        MLflow round-trip fix. The full inner ``state_dict`` (moved to CPU) is
+        saved as safetensors under ``directory/model``.
 
         Args:
-            directory: Unused — TimesFM has no on-disk weights to reload.
+            directory: Directory :meth:`save` is writing into.
+        """
+        model_dir = directory / "model"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        if not self._finetuned:
+            return
+        from safetensors.torch import save_file
+
+        state_dict = self._model.model.state_dict()  # type: ignore[attr-defined]
+        cpu_state = {key: tensor.detach().cpu().contiguous() for key, tensor in state_dict.items()}
+        save_file(cpu_state, str(model_dir / self._FINETUNED_WEIGHTS))
+
+    def _rebuild_model(self, directory: Path) -> object:
+        """Rebuild the shared checkpoint after deserialisation.
+
+        Zero-shot pools re-pull from ``model_id`` (TimesFM has no on-disk weights
+        in that case). Fine-tuned pools instead construct the architecture with
+        random init (no hub download) and load the persisted fine-tuned
+        ``state_dict`` written by :meth:`_save_model`, so the trained weights
+        survive an MLflow save/load cycle.
+
+        Args:
+            directory: The directory :meth:`_save_model` wrote into.
 
         Returns:
-            The reloaded TimesFM checkpoint, moved to CUDA when available.
+            The rebuilt TimesFM checkpoint, moved to CUDA when available.
         """
         import timesfm
         import torch
 
         from .config import DEFAULT_MODEL_ID
 
-        model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
-            self._model_id or DEFAULT_MODEL_ID
-        )
+        if self._finetuned:
+            from safetensors.torch import load_file
+
+            model = timesfm.TimesFM_2p5_200M_torch(torch_compile=False)
+            weights = load_file(str(directory / "model" / self._FINETUNED_WEIGHTS))
+            model.model.load_state_dict(weights, strict=True)
+        else:
+            model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(
+                self._model_id or DEFAULT_MODEL_ID
+            )
         inner = model.model
         if torch.cuda.is_available() and torch.cuda.device_count() > 0:
             if next(inner.parameters()).device.type != "cuda":
                 inner.to("cuda")
+        model.model.eval()
         return model
+
+    def _state_meta(self) -> dict:
+        """Extend the base pooled meta with the fine-tuned flag."""
+        meta = super()._state_meta()
+        meta["finetuned"] = bool(self._finetuned)
+        return meta
+
+    def _restore_meta(self, meta: dict) -> None:
+        """Inverse of :meth:`_state_meta` — restore the fine-tuned flag first.
+
+        ``finetuned`` must be restored before :meth:`_rebuild_model` runs (it is
+        called from ``NeuralFitted.load`` right after ``_restore_meta``) so the
+        rebuild picks the fine-tuned vs. zero-shot path correctly.
+        """
+        super()._restore_meta(meta)
+        self._finetuned = bool(meta.get("finetuned", False))
+        self._checkpoint_compiled = False
 
 
 class TimesFM25Forecaster:
@@ -371,8 +434,10 @@ class TimesFM25Forecaster:
         if not state.transforms:
             return None
 
-        model = _build_timesfm25(train, target, covariate_cols, cfg, scope, config)
-        return TimesFM25PooledFitted(
+        model, finetuned = _build_timesfm25(
+            train, target, covariate_cols, cfg, scope, config, state.transforms
+        )
+        fitted = TimesFM25PooledFitted(
             model,
             state.transforms,
             state.validation_windows,
@@ -381,6 +446,8 @@ class TimesFM25Forecaster:
             int(config.forecast_horizon),
             cfg["model_id"],
         )
+        fitted._finetuned = finetuned
+        return fitted
 
 
 def _build_timesfm25(
@@ -390,41 +457,55 @@ def _build_timesfm25(
     cfg: dict,
     scope: str,
     config: ForecastConfig,
-) -> object:
-    """Load the TimesFM 2.5 (200M torch) model (zero-shot) on GPU when available.
+    transforms: dict[str, LogStandardizeTransform] | None = None,
+) -> tuple[object, bool]:
+    """Load the TimesFM 2.5 (200M torch) model on GPU when available.
 
     Faithful port of ``timesfm25/runner.load_model``: load from the HF model id
     and move the inner module to CUDA when present. The decode graph is compiled
-    lazily at predict time. In-adapter fine-tuning is not wired (the IBM
-    reference uses a bespoke custom training loop); when ``cfg['finetune']`` is
-    set this logs a warning and returns the zero-shot model.
+    lazily at predict time. When ``cfg['finetune']`` is set, the loaded
+    checkpoint is fine-tuned in place on the pooled fleet via
+    :func:`...finetune.finetune` (a bespoke torch loop) before it is
+    returned; otherwise it is used zero-shot.
 
     Args:
-        train: Training rows (unused — zero-shot).
-        target: Target column name (unused).
+        train: Pooled training rows (used only when fine-tuning).
+        target: Target column name (used only when fine-tuning).
         covariate_cols: Covariate columns (unused — TimesFM 2.5 is univariate).
         cfg: Resolved TimesFM25 settings.
         scope: ``"per_device"`` or ``"pooled"`` (unused — one shared checkpoint).
-        config: Pipeline configuration (unused).
+        config: Pipeline configuration (provides ``forecast_horizon``).
+        transforms: Per-device scalers (pool membership); required to fine-tune.
 
     Returns:
-        The loaded (uncompiled) TimesFM 2.5 wrapper.
+        ``(model, finetuned)`` — the loaded wrapper and whether an optimisation
+        step actually ran (``False`` for the zero-shot path or when no training
+        window could be built).
     """
     import timesfm
     import torch
-
-    if cfg["finetune"]:
-        logger.warning(
-            "timesfm25 in-adapter fine-tune is not wired (the IBM reference uses "
-            "a bespoke custom training loop); using the zero-shot model."
-        )
 
     model = timesfm.TimesFM_2p5_200M_torch.from_pretrained(cfg["model_id"])
     inner = model.model
     if torch.cuda.is_available() and torch.cuda.device_count() > 0:
         if next(inner.parameters()).device.type != "cuda":
             inner.to("cuda")
-    return model
+
+    if not cfg["finetune"]:
+        return model, False
+
+    from . import finetune as timesfm25_finetune
+
+    profile = "gpu" if torch.cuda.is_available() else "cpu"
+    return timesfm25_finetune.finetune(
+        model,
+        train,
+        target,
+        transforms or {},
+        profile=profile,
+        config=config,
+        cfg=cfg,
+    )
 
 
 register_backend(TimesFM25Forecaster, available=_AVAILABLE)

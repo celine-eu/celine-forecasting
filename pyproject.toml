@@ -32,7 +32,7 @@ dev = [
 # Groups resolve independently so conflicting deps don't clash.
 [dependency-groups]
 ttm = ["torch", "transformers", "granite-tsfm>=0.3.6"]
-chronos = ["torch", "transformers", "accelerate", "chronos-forecasting==2.2.2"]
+chronos = ["torch", "transformers", "accelerate", "chronos-forecasting==2.2.2", "peft>=0.10"]
 timesfm25 = ["torch", "safetensors", "timesfm==2.0.1"]
 moirai = ["torch", "lightning", "gluonts==0.14.4", "uni2ts==2.0.0"]
 
