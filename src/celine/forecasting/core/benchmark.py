@@ -56,12 +56,17 @@ class BenchmarkCandidate:
             (``dict.update``), other attributes are replaced outright. v1 only
             supports overriding top-level ``ForecastConfig`` attributes — no
             nested/dotted paths.
+        train_devices: Pooled-scope only. Extra devices to fold into the
+            per-origin training pool beyond the scored devices (forwarded to
+            :func:`~celine.forecasting.core.evaluation.run_backtest`); the scored
+            cells are unchanged. ``None`` trains only on the scored devices.
     """
 
     name: str
     model: str
     scope: str = "per_device"
     model_config: dict | None = None
+    train_devices: list[str] | None = None
 
 
 @dataclass
@@ -127,6 +132,7 @@ class BenchmarkSuite:
         *,
         scope: str = "per_device",
         model_config: dict | None = None,
+        train_devices: list[str] | None = None,
     ) -> None:
         """Register a candidate to be scored on the next :meth:`run`.
 
@@ -137,6 +143,9 @@ class BenchmarkSuite:
             scope: Fitting scope passed to the backend.
             model_config: Optional per-candidate config override, see
                 :class:`BenchmarkCandidate`.
+            train_devices: Pooled-scope only. Extra devices to fold into the
+                training pool beyond the scored devices, see
+                :class:`BenchmarkCandidate`.
 
         Raises:
             ValueError: If ``name`` is already registered.
@@ -144,7 +153,13 @@ class BenchmarkSuite:
         if any(candidate.name == name for candidate in self._candidates):
             raise ValueError(f"Candidate name {name!r} is already registered")
         self._candidates.append(
-            BenchmarkCandidate(name=name, model=model, scope=scope, model_config=model_config)
+            BenchmarkCandidate(
+                name=name,
+                model=model,
+                scope=scope,
+                model_config=model_config,
+                train_devices=train_devices,
+            )
         )
 
     def run(
@@ -202,6 +217,7 @@ class BenchmarkSuite:
                     available_columns=available_columns,
                     model=candidate.model,
                     scope=candidate.scope,
+                    train_devices=candidate.train_devices,
                 )
             per_candidate_rows[candidate.name] = bt_df
 

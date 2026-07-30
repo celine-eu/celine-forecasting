@@ -290,3 +290,142 @@ def test_model_config_override_applies_per_candidate(processed, bench_config):
     assert "lgbm_shallow" in result.comparison.index
     # The shared base config must not have been mutated by the override.
     assert bench_config.lgb_params.get("num_leaves") != 3
+
+
+# --------------------------------------------------------------------------
+# train_devices: train on a larger fleet, score only a smaller eval cohort.
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+def processed_pool(multi_device_meters, config):
+    """A 3-device processed frame (``pool-A``/``pool-B``/``pool-C``), no weather.
+
+    Every device is both import- and export-eligible, so any of them can play
+    the "extra training device" role in the ``train_devices`` tests.
+    """
+    return build_processed_hourly(multi_device_meters, config)
+
+
+def _pooled_import_config(config: ForecastConfig) -> ForecastConfig:
+    """A copy of ``config`` restricted to the import target both cohorts share."""
+    cfg = copy.deepcopy(config)
+    cfg.targets = ["grid_import"]
+    return cfg
+
+
+def test_pooled_train_devices_superset_fits_extra_but_scores_eval_only(
+    processed_pool, config, _isolate_registry
+):
+    """train_devices ⊃ devices: the extra device trains but is never scored.
+
+    The fit pool folds in ``pool-C``'s rows, yet only the eval devices
+    (``pool-A``/``pool-B``) appear in the output, and the scored
+    (device, target, origin) cells are byte-identical to a run WITHOUT
+    ``train_devices`` (so cross-candidate cell intersection is preserved).
+    """
+    cfg = _pooled_import_config(config)
+    available = set(processed_pool.columns)
+    eval_devices = ["pool-A", "pool-B"]
+
+    _FakePooledBackend.reset()
+    register_backend(_FakePooledBackend)
+    with_extra = run_backtest(
+        processed_pool, cfg, devices=eval_devices,
+        available_columns=available, model="fake-pooled-bench", scope="pooled",
+        train_devices=["pool-A", "pool-B", "pool-C"],
+    )
+    fit_calls_with_extra = list(_FakePooledBackend.fit_calls)
+
+    _FakePooledBackend.reset()
+    without_extra = run_backtest(
+        processed_pool, cfg, devices=eval_devices,
+        available_columns=available, model="fake-pooled-bench", scope="pooled",
+    )
+
+    # Every pooled fit saw pool-C's rows when train_devices included it.
+    assert fit_calls_with_extra, "the pooled backend never fit grid_import"
+    assert all(call["devices"] == ["pool-A", "pool-B", "pool-C"] for call in fit_calls_with_extra)
+    # Only the eval devices are scored — the extra training device never is.
+    assert set(with_extra["device_id"]) == {"pool-A", "pool-B"}
+    # Cell identity: same (device, target, origin) cells with or without the extra.
+    assert set(map(tuple, with_extra[_CELL_COLS].to_numpy())) == set(
+        map(tuple, without_extra[_CELL_COLS].to_numpy())
+    )
+
+
+def test_pooled_train_devices_not_covering_eval_still_fits_eval(
+    processed_pool, config, _isolate_registry
+):
+    """Union semantics: an eval device absent from train_devices is still fitted.
+
+    ``train_devices=["pool-C"]`` omits both eval devices, but the fit pool is
+    ``train_devices ∪ devices``, so ``pool-A``/``pool-B`` are still in every fit
+    frame and still scored (their transforms must exist for predict).
+    """
+    cfg = _pooled_import_config(config)
+    available = set(processed_pool.columns)
+
+    _FakePooledBackend.reset()
+    register_backend(_FakePooledBackend)
+    result = run_backtest(
+        processed_pool, cfg, devices=["pool-A", "pool-B"],
+        available_columns=available, model="fake-pooled-bench", scope="pooled",
+        train_devices=["pool-C"],
+    )
+
+    assert _FakePooledBackend.fit_calls, "the pooled backend never fit grid_import"
+    for call in _FakePooledBackend.fit_calls:
+        assert call["devices"] == ["pool-A", "pool-B", "pool-C"]
+    assert set(result["device_id"]) == {"pool-A", "pool-B"}
+
+
+def test_per_device_scope_ignores_train_devices(
+    processed_pool, config, _isolate_registry, caplog
+):
+    """Per-device scope ignores train_devices (logs a warning, results unchanged)."""
+    cfg = _pooled_import_config(config)
+    available = set(processed_pool.columns)
+
+    _FakePooledBackend.reset()
+    register_backend(_FakePooledBackend)
+    baseline = run_backtest(
+        processed_pool, cfg, devices=["pool-A"],
+        available_columns=available, model="fake-pooled-bench", scope="per_device",
+    )
+
+    _FakePooledBackend.reset()
+    with caplog.at_level("WARNING"):
+        with_extra = run_backtest(
+            processed_pool, cfg, devices=["pool-A"],
+            available_columns=available, model="fake-pooled-bench", scope="per_device",
+            train_devices=["pool-B", "pool-C"],
+        )
+
+    assert any("train_devices is ignored" in rec.message for rec in caplog.records)
+    pd.testing.assert_frame_equal(baseline, with_extra)
+
+
+def test_benchmark_suite_train_devices_preserves_common_cells(
+    processed_pool, config, _isolate_registry
+):
+    """Two pooled candidates — same backend/scope, one with train_devices, one
+    without — score identical cells, so the cross-candidate intersection is full.
+    """
+    cfg = _pooled_import_config(config)
+
+    _FakePooledBackend.reset()
+    register_backend(_FakePooledBackend)
+    suite = BenchmarkSuite("test", processed_pool, cfg)
+    suite.add_candidate("pooled_local", "fake-pooled-bench", scope="pooled")
+    suite.add_candidate(
+        "pooled_fleet", "fake-pooled-bench", scope="pooled",
+        train_devices=["pool-A", "pool-B", "pool-C"],
+    )
+    result = suite.run(n_origins=2, devices=["pool-A", "pool-B"])
+
+    cells = _cells_by_candidate(result.per_origin)
+    assert cells["pooled_local"] == cells["pooled_fleet"]
+    # Both scored cohorts are non-empty and cover only the eval devices.
+    assert cells["pooled_local"]
+    assert {"pool-A", "pool-B"} == {device for device, _t, _o in cells["pooled_local"]}

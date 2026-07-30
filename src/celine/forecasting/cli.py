@@ -84,6 +84,14 @@ Candidates = Annotated[
     ),
 ]
 Origins = Annotated[int, typer.Option(help="Rolling-origin count per candidate")]
+EvalDeviceIds = Annotated[
+    list[str] | None,
+    typer.Option(help="Only score these device IDs (pooled candidates still train on the pool)"),
+]
+PoolFullFleet = Annotated[
+    bool,
+    typer.Option(help="Pooled candidates train on the full loaded fleet, not just scored devices"),
+]
 
 
 def _setup_logging(verbose: bool) -> None:
@@ -277,6 +285,8 @@ def benchmark(
     output: Output = Path("meter_forecast_out"),
     candidates: Candidates = "lightgbm",
     origins: Origins = 21,
+    eval_device_ids: EvalDeviceIds = None,
+    pool_full_fleet: PoolFullFleet = False,
 ) -> None:
     """Compare model backends on identical rolling-origin splits, logged to MLflow."""
     _setup_logging(verbose)
@@ -297,16 +307,41 @@ def benchmark(
     data_end = processed[COL_TS_HOUR].max()
     experiment_name = _benchmark_experiment_name(data_end)
 
+    fleet_ids = sorted(processed[COL_DEVICE_ID].unique())
+    if eval_device_ids is not None:
+        missing = [device for device in eval_device_ids if device not in set(fleet_ids)]
+        if missing:
+            typer.echo(
+                f"Unknown --eval-device-ids not present in the data: {', '.join(missing)}",
+                err=True,
+            )
+            raise typer.Exit(1)
+
     # BenchmarkSuite expects a UTC-indexed weather frame (backends reindex it to
     # forecast hours); prepare it here as the run/serve paths do — passing the raw
     # frame makes LightGBM's reindex fail on an int64 vs datetime index mismatch.
     weather_prepared = prepare_weather(df_weather, cfg) if df_weather is not None else None
     suite = BenchmarkSuite("meters", processed, cfg, weather_df=weather_prepared)
+    has_pooled = False
     for name, backend, scope in tokens:
-        suite.add_candidate(name, backend, scope=scope)
+        if scope == "pooled":
+            has_pooled = True
+            suite.add_candidate(
+                name,
+                backend,
+                scope=scope,
+                train_devices=fleet_ids if pool_full_fleet else None,
+            )
+        else:
+            suite.add_candidate(name, backend, scope=scope)
+    if pool_full_fleet and not has_pooled:
+        typer.echo(
+            "Warning: --pool-full-fleet has no effect without a pooled candidate",
+            err=True,
+        )
 
     tracker = get_tracker(cfg, experiment_name=experiment_name)
-    result = suite.run(n_origins=origins, tracker=tracker)
+    result = suite.run(n_origins=origins, devices=eval_device_ids, tracker=tracker)
 
     output.mkdir(parents=True, exist_ok=True)
     comparison_path = output / "benchmark_comparison.csv"

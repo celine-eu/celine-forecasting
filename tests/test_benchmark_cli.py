@@ -10,6 +10,8 @@ false``, per the no-op tracker path in ``core/tracking.py``.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
+
 import pandas as pd
 import pytest
 import typer
@@ -21,8 +23,11 @@ from celine.forecasting.cli import (
     _parse_candidate_tokens,
     app,
 )
-from celine.forecasting.core.benchmark import NAIVE_MODEL_NAME
+from celine.forecasting.core import benchmark as benchmark_mod
+from celine.forecasting.core import forecaster as registry_mod
+from celine.forecasting.core.benchmark import NAIVE_MODEL_NAME, BenchmarkResult
 from celine.forecasting.core.config import load_config
+from celine.forecasting.core.forecaster import register_backend
 from celine.forecasting.core.tracking import BaseTracker, get_tracker
 
 runner = CliRunner()
@@ -136,3 +141,157 @@ def test_benchmark_cli_end_to_end(tmp_path, meters_csv, hermetic_datasets_config
 
     comparison = pd.read_csv(comparison_path, index_col=0)
     assert set(comparison.index) == {"lightgbm", NAIVE_MODEL_NAME}
+
+
+# --------------------------------------------------------------------------- eval-device-ids
+@pytest.fixture
+def two_device_csv(tmp_path, raw_meters):
+    """Both fixture meters (``dev-A``/``dev-B``) written to a CSV for the CLI."""
+    path = tmp_path / "meters.csv"
+    raw_meters.to_csv(path, index=False)
+    return path
+
+
+def test_benchmark_cli_eval_device_ids_filters_scoring(
+    tmp_path, two_device_csv, hermetic_datasets_config
+) -> None:
+    """``--eval-device-ids dev-B`` scores only that device (dev-A never appears)."""
+    output_dir = tmp_path / "out"
+    result = runner.invoke(
+        app,
+        [
+            "benchmark",
+            "--meters", str(two_device_csv),
+            "--datasets-config", str(hermetic_datasets_config),
+            "--candidates", "lightgbm",
+            "--origins", "1",
+            "--eval-device-ids", "dev-B",
+            "--output", str(output_dir),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    per_origin = pd.read_csv(output_dir / "benchmark_per_origin.csv")
+    assert set(per_origin["device_id"]) == {"dev-B"}
+
+
+def test_benchmark_cli_unknown_eval_device_id_exits_1(
+    tmp_path, two_device_csv, hermetic_datasets_config
+) -> None:
+    """An eval device id absent from the data exits 1 and names the missing id."""
+    result = runner.invoke(
+        app,
+        [
+            "benchmark",
+            "--meters", str(two_device_csv),
+            "--datasets-config", str(hermetic_datasets_config),
+            "--candidates", "lightgbm",
+            "--eval-device-ids", "not-a-device",
+            "--output", str(tmp_path / "out"),
+        ],
+    )
+    assert result.exit_code == 1
+    assert "not-a-device" in result.output
+
+
+# --------------------------------------------------------------------------- pool-full-fleet
+class _CliFakePooledBackend:
+    """Minimal pooled backend so ``:pooled`` candidate tokens validate."""
+
+    name = "cli-fake-pooled"
+    required_extra: str | None = None
+    supported_scopes: tuple[str, ...] = ("pooled", "per_device")
+
+    def fit(self, *args: object, **kwargs: object) -> None:  # pragma: no cover - never run
+        return None
+
+
+class _RecordingSuite:
+    """Stand-in for ``BenchmarkSuite`` that records add_candidate/run arguments."""
+
+    last: _RecordingSuite | None = None
+
+    def __init__(self, domain, data, config, *, weather_df=None) -> None:
+        self.added: list[dict] = []
+        self.run_devices: object = "unset"
+        type(self).last = self
+
+    def add_candidate(
+        self, name, model, *, scope="per_device", model_config=None, train_devices=None
+    ) -> None:
+        self.added.append({"name": name, "scope": scope, "train_devices": train_devices})
+
+    def run(self, n_origins=21, devices=None, *, tracker=None) -> BenchmarkResult:
+        self.run_devices = devices
+        comparison = pd.DataFrame(
+            {"mae": [1.0], "rmse": [1.0], "mbe": [0.0], "skill_vs_naive": [0.0], "n_rows": [1]},
+            index=[NAIVE_MODEL_NAME],
+        )
+        per_origin = pd.DataFrame(columns=["candidate", "device_id", "target", "origin", "mae"])
+        return BenchmarkResult(
+            comparison=comparison, per_origin=per_origin, winner=NAIVE_MODEL_NAME
+        )
+
+
+@pytest.fixture
+def _isolate_registry() -> Iterator[None]:
+    """Snapshot and restore the backend registry around a test."""
+    saved = dict(registry_mod._REGISTRY)
+    try:
+        yield
+    finally:
+        registry_mod._REGISTRY.clear()
+        registry_mod._REGISTRY.update(saved)
+
+
+@pytest.fixture
+def recording_suite(monkeypatch) -> type[_RecordingSuite]:
+    """Swap ``BenchmarkSuite`` for the recording stub (no real backend fits)."""
+    _RecordingSuite.last = None
+    monkeypatch.setattr(benchmark_mod, "BenchmarkSuite", _RecordingSuite)
+    return _RecordingSuite
+
+
+def test_benchmark_cli_pool_full_fleet_sets_train_devices_on_pooled(
+    tmp_path, two_device_csv, hermetic_datasets_config, recording_suite, _isolate_registry
+) -> None:
+    """``--pool-full-fleet`` sets train_devices=<full fleet> on pooled candidates only."""
+    register_backend(_CliFakePooledBackend)
+    result = runner.invoke(
+        app,
+        [
+            "benchmark",
+            "--meters", str(two_device_csv),
+            "--datasets-config", str(hermetic_datasets_config),
+            "--candidates", "cli-fake-pooled:pooled",
+            "--eval-device-ids", "dev-B",
+            "--pool-full-fleet",
+            "--output", str(tmp_path / "out"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    added = recording_suite.last.added
+    assert len(added) == 1
+    assert added[0]["scope"] == "pooled"
+    assert added[0]["train_devices"] == ["dev-A", "dev-B"]
+    # Scoring is still restricted to the eval cohort.
+    assert recording_suite.last.run_devices == ["dev-B"]
+
+
+def test_benchmark_cli_pool_full_fleet_without_pooled_warns(
+    tmp_path, two_device_csv, hermetic_datasets_config, recording_suite
+) -> None:
+    """``--pool-full-fleet`` with no pooled candidate warns but still succeeds."""
+    result = runner.invoke(
+        app,
+        [
+            "benchmark",
+            "--meters", str(two_device_csv),
+            "--datasets-config", str(hermetic_datasets_config),
+            "--candidates", "lightgbm",
+            "--pool-full-fleet",
+            "--output", str(tmp_path / "out"),
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "no effect" in result.output
+    assert recording_suite.last.added[0]["train_devices"] is None

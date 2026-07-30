@@ -82,7 +82,10 @@ _SEED = 42
 # template's ``_PROFILES``. ``train_distance`` is the sliding-window stride for
 # training windows (the uni2ts CLI default is 1; CPU uses a daily stride to
 # keep epochs tractable). RTX 3080 10 GB fits moirai-small (14M) full-parameter
-# fine-tuning comfortably at batch 32.
+# fine-tuning comfortably at batch 32. ``num_workers`` must stay 0: torch >= 2.7
+# spawns (not forks) DataLoader workers after CUDA init, and spawn pickles the
+# dataset — the nested ``_InMemoryIndexer`` and uni2ts transforms aren't
+# picklable. The windows are tiny in-memory arrays, so workers buy nothing.
 _PROFILES: dict[str, dict[str, Any]] = {
     "cpu": {
         "batch_size": 8,
@@ -97,7 +100,7 @@ _PROFILES: dict[str, dict[str, Any]] = {
         "max_epochs": 30,
         "max_steps": 5000,
         "train_distance": 1,
-        "num_workers": 2,
+        "num_workers": 0,
         "bf16": True,
     },
 }

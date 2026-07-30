@@ -132,6 +132,7 @@ def run_backtest(
     available_columns: set[str] | None = None,
     model: str = "lightgbm",
     scope: str = "per_device",
+    train_devices: list[str] | None = None,
 ) -> pd.DataFrame:
     """Run a leakage-free rolling-origin backtest over the given devices.
 
@@ -144,6 +145,12 @@ def run_backtest(
         model: Backend name resolved via :func:`get_forecaster`.
         scope: Fitting scope passed to the backend (must match the trained model
             so backtest metrics measure what was deployed).
+        train_devices: Only meaningful for ``scope="pooled"``. Extra devices to
+            fold into the per-origin fit pool beyond the scored ``devices`` (the
+            scored cells are unchanged; see :func:`_run_pooled_backtest`).
+            ``None`` keeps the current behaviour (the fit pool equals
+            ``devices``). Ignored — with a warning — for per-device scope, whose
+            fits use only each device's own rows.
 
     Returns:
         Tidy frame of per-(device, target, origin, horizon) actual/prediction
@@ -158,8 +165,14 @@ def run_backtest(
     horizon = config.forecast_horizon
     if scope == "pooled":
         return _run_pooled_backtest(
-            df, config, backend=backend, devices=devices,
+            df, config, backend=backend, devices=devices, train_devices=train_devices,
             weather_df=weather_df, available_columns=available_columns, scope=scope,
+        )
+    if train_devices is not None:
+        logger.warning(
+            "train_devices is ignored for scope=%r; per-device fits use only each "
+            "device's own rows",
+            scope,
         )
     export_eligible, import_eligible = compute_eligibility(df, config)
 
@@ -230,6 +243,7 @@ def _run_pooled_backtest(
     weather_df: pd.DataFrame | None,
     available_columns: set[str] | None,
     scope: str,
+    train_devices: list[str] | None = None,
 ) -> pd.DataFrame:
     """Rolling-origin backtest for a pooled candidate: fit once per origin.
 
@@ -257,10 +271,19 @@ def _run_pooled_backtest(
         df: Processed hourly frame (outliers already removed).
         config: Pipeline configuration.
         backend: The resolved pooled backend (already scope-validated).
-        devices: Devices to backtest (filtered per target by eligibility).
+        devices: Devices to backtest (filtered per target by eligibility); the
+            scored (device, target, origin) cells are drawn from these alone.
         weather_df: Optional UTC-indexed weather frame.
         available_columns: Weather columns present in the data.
         scope: Fitting scope forwarded to ``backend.fit`` (``"pooled"``).
+        train_devices: Extra devices to fold into the per-origin fit pool. The
+            fit pool per target is ``(train_devices ∪ devices)`` intersected with
+            that target's eligibility — the union with ``devices`` guarantees
+            every scored device is inside the training pool (its transforms and
+            scalers must exist for predict to work). Origins, scoring and output
+            cells stay anchored on the eval ``devices`` only, so the scored cells
+            are byte-identical to a run without ``train_devices``. ``None`` keeps
+            the fit pool equal to ``devices``.
 
     Returns:
         Tidy per-(device, target, origin, horizon) rows, the same shape as
@@ -269,19 +292,27 @@ def _run_pooled_backtest(
     horizon = config.forecast_horizon
     export_eligible, import_eligible = compute_eligibility(df, config)
     target_pools = {COL_GRID_EXPORT: export_eligible, COL_GRID_IMPORT: import_eligible}
+    extra_train = set(train_devices or [])
 
     records: list[dict] = []
     for target in config.targets:
-        pool = [device for device in devices if device in target_pools.get(target, set())]
-        if not pool:
+        eligible = target_pools.get(target, set())
+        eval_pool = [device for device in devices if device in eligible]
+        if not eval_pool:
             continue
         has_pv = target == COL_GRID_EXPORT
-        pool_frame = df[df[COL_DEVICE_ID].isin(pool)]
+        # The fit pool folds in the extra training devices; the union with the
+        # eval devices keeps every scored device inside the trained pool.
+        fit_ids = (set(devices) | extra_train) & eligible
+        pool_frame = df[df[COL_DEVICE_ID].isin(fit_ids)]
+        # Scoring only needs the eval devices' own frames.
         device_frames = {
-            device: pool_frame[pool_frame[COL_DEVICE_ID] == device] for device in pool
+            device: pool_frame[pool_frame[COL_DEVICE_ID] == device] for device in eval_pool
         }
         # Per-device-anchored origins (identical to the per-device/naive paths),
-        # fit once per origin in the union, score a device only at its own.
+        # computed over the eval devices ONLY so the scored cells never depend on
+        # the training-pool devices; fit once per origin in the union, score a
+        # device only at its own.
         device_origins = {
             device: set(backtest_origins(dev, config, horizon=horizon))
             for device, dev in device_frames.items()
@@ -299,7 +330,7 @@ def _run_pooled_backtest(
             # the fitted pool. Prefer the explicit membership list when exposed;
             # otherwise fall back to catching the KeyError predict() raises.
             fitted_devices = getattr(fitted, "pool_devices", None)
-            for device in pool:
+            for device in eval_pool:
                 if origin not in device_origins[device]:
                     continue
                 if fitted_devices is not None and device not in fitted_devices:
