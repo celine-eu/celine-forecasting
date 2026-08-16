@@ -27,14 +27,4 @@ data/
 docs/superpowers/
 local/
 
-
-# The local half of .agents/references.md — values that must not be committed (REQ-0011)
-.agents/references.local.md
-
-# Agent material is not published from this repository. What stays is the
-# checker's own configuration; the knowledge, playbooks, plans and work live in
-# the companion named by AGENTS_COMPANION.
-.agents/*
-!.agents/README.md
-!.agents/harness.toml
-!.agents/references.md
+.agents/
