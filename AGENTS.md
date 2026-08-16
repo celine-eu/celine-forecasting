@@ -1,79 +1,82 @@
-## Introduction
+<!-- harness-standard v4 — issued by the agent harness. Do not edit; replace it with `python -m harness upgrade <target>`. -->
 
-`celine-forecasting` is the open-source energy forecasting repository for the CELINE platform. It provides standalone training pipelines and model serving for smart meter energy forecasting.
+# Agent Guide
 
-## Structure
+This file is the entry point. It is **navigation and constraints**: where things are, and
+what you may not do.
 
-- `src/celine/meter_forecasting/` - Python package. Multi-backend by design:
-  - `core/` - model-agnostic engine: data contracts, cleaning, weather, features
-    catalogue, CQR, naive baselines, per-horizon bias correction, evaluation,
-    MLflow tracking + serving, and the `Forecaster` interface + backend registry
-    (`core/forecaster.py`). `core/` never imports from `models/`.
-  - `models/<strategy>/` - one folder per forecasting backend, each implementing
-    the `Forecaster` interface: `models/lightgbm/`, `models/ttm/`,
-    `models/chronos_bolt/`, `models/chronos2/`, `models/timesfm25/`,
-    `models/moirai/`.
-  - `models/neural_common/` - torch-free shared helpers for neural backends
-    (transform, windows, covariate channels, single-origin forecast assembly,
-    `NeuralFitted` save/load). Imports NO torch, so it stays usable in the dev env.
-  - `pipeline.py` / `cli.py` - orchestration; resolve the backend via
-    `get_forecaster(model)`.
+It says nothing about this repository in particular. **It is standard — byte-identical in
+every repository carrying this harness** — so having read it once you have read it
+everywhere. Nothing repository-specific is ever added here. Content that seems to belong
+in this file belongs in one of the homes below instead, and the rule that decides which is
+in the rulebook.
 
-  **Neural backends** (TTM, Chronos-Bolt, Chronos-2, TimesFM 2.5, Moirai) have
-  mutually conflicting deps and are managed as **uv dependency groups** (resolved
-  independently). Install one at a time with `uv sync --group <backend>`.
-  `core/` and `models/neural_common/` stay torch-free; the torch-touching code
-  is dependency-guarded (the registry raises an actionable error when a backend's
-  lib is absent) and verified with
-  `uv run --group <backend> python -m celine.meter_forecasting.models.<backend>.smoke_<backend>`.
+## Read in this order
 
-  Backend status (torch seams are ported from the IBM `energy_forecasting`
-  reference and run on the GPU box — they cannot execute in the torch-free dev env):
-  - **ttm** — fit / fine-tune / predict; verified on the RTX 3080.
-  - **chronos_bolt / chronos2 / timesfm25 / moirai** — zero-shot inference +
-    persistence implemented (chronos2 & moirai use covariates; bolt & timesfm are
-    univariate). Pending GPU smoke verification. In-adapter fine-tune is NOT wired
-    for these four (the reference treats them as zero-shot, or fine-tunes via a
-    separate bespoke driver); their `finetune.py` raises with a pointer. The
-    config `backends.<name>.finetune` flag defaults to zero-shot accordingly.
-    See `TODO.md` for the per-backend verification checklist.
-  - `core/config_data/` - Default configuration (`default_config.yaml`)
-- `tests/` - Test suite
-- `examples/` - Usage examples
-- `docs/` - Data contracts and feature documentation
-- `docker-compose.yaml` - MLflow + MinIO with external PostgreSQL
-- `mlflow/` - MLflow Dockerfile
+1. This file.
+2. `.agents/README.md` — the rulebook: where work is recorded, and how. Also standard,
+   also identical everywhere.
+3. `.agents/references.local.md` — gitignored, and it names this repository's
+   **companion**: the parallel directory holding the knowledge, playbooks, plans and work.
+   The companion is the only source of truth for all four.
+4. The companion's `knowledge/` — what is true of this repository and not visible in its
+   code. List the directory; read what the task needs.
+5. `docs/`, on demand. Never speculatively.
 
-## Conventions
+The two standard files are the same wherever they appear. Having read them at one root, do
+not read them again in a repository nested inside it — read that repository's companion
+`knowledge/` instead, because that is the part which differs. **Each repository has its
+own companion**; a nested repository does not share the outer one's.
 
-- Energy values are always in **kWh**, not kW
-- MLflow is the experiment tracker and model registry
-- Configuration via YAML (`core/config_data/default_config.yaml`), overridable per-run
-- The core package has no infrastructure dependencies (no DB, no message queue) and
-  no model dependencies (no torch); heavy model stacks live behind optional extras
-- Forecasting backends are pluggable: select with `--model` (default `lightgbm`)
-  and `--scope` (`per_device` default, or `pooled`)
+**If a copy of a standard file does differ, the divergence is the finding.** Report it;
+do not follow it and do not quietly reconcile it.
 
-## Constraints
+## Where things are
 
-- This repo should be reusable across different datasets, ensure data input is generalized, have clear shapes and requirements and is communicated properly in user facing docs
-- private records, table, datasets and names should never land the open source codebase.
-- local database uri is postgresql://postgres:securepassword123@172.17.0.1:15432/datasets
+| Looking for | Go to |
+|---|---|
+| what this repository is and does | its `README.md`, then `docs/` |
+| where the companion is | `.agents/references.local.md` |
+| what is true of the code and not obvious from reading it | companion `knowledge/` |
+| how a repeated procedure is performed | companion `playbooks/` |
+| what is being worked on, and how far it has got | companion `plans/`, `work/` |
+| why a technical choice was made | `docs/decisions/` |
+| what the product must do | the specifications in `docs/` |
+| whether a requirement is verified | `.agents/trace/`, or the tool named in `.agents/harness.toml` |
+| what is broken | the issue tracker. Never a file in this repository |
+| how the parts are composed, built and run | the build and composition files at the root |
 
-## Running
+This table is fixed because the structure is fixed. What varies between repositories is
+what those directories hold — found by listing them, never by an index maintained here. An
+index here would be a second copy of a fact, and the copy is what goes stale.
 
-```bash
-uv sync --extra mlflow --extra dev --extra db
-uv run pytest
-uv run meter-forecast --help
+## Behavioural settings
 
-# LightGBM (default backend)
-uv run meter-forecast run --datasets-config examples/datasets.yaml --output out/
+The switches, not the rules. What each one serves is stated in the rulebook.
 
-# Neural backend (install group first, then run)
-uv sync --group ttm
-uv run meter-forecast run --datasets-config examples/datasets.yaml --output out/ --model ttm
-```
+- **Ask rather than decide** when a request needs a requirement that does not exist yet.
+  Ask directly, and do not proceed on an inferred requirement.
+- **Write the plan first** for anything non-trivial, and create its work directory before
+  the first change of any phase.
+- **Establish the baseline before changing anything**, so a pre-existing failure is never
+  attributed to your change.
+- **Report faithfully.** Name what ran, what did not, and what was skipped.
+- **Check whether the change crosses a seam** — an interface another component depends on.
+  A change that crosses one is not local, however local it compiles. Which seams exist
+  here is recorded in the companion `knowledge/`.
+- **Change the component that owns the behaviour**, not the place that consumes it. A
+  workaround written at the consumer is a defect left in the owner.
 
-`bias_correction.enabled` in the config adds a validation-derived
-`mae_bias_corrected` column to the backtest summary (model-agnostic Jensen-gap fix).
+## Maintaining this file
+
+**Read only.** Do not edit it, and do not edit `.agents/README.md` beside it. Neither is
+this repository's document.
+
+A change lands by changing the harness that issues it, after which every repository
+receives the same text — `python -m harness upgrade <target>`. Editing one copy creates
+the drift the standard exists to remove, and the next reader cannot tell an improvement
+from an accident. REQ-0012 reports a copy that has been altered.
+
+Anything you were about to add here has a home: a trap goes to the companion `knowledge/`, a
+procedure to its `playbooks/`, a rationale to `docs/decisions/`, a description of the
+system to `docs/`, and a defect to the issue tracker.

@@ -60,7 +60,7 @@ Use `-j` to control parallelism: `task run -- -j 8 --cv`
 ```bash
 docker compose up -d
 # MLflow UI at http://172.17.0.1:5000
-# MinIO Console at http://172.17.0.1:9001 (minioadmin/minioadmin)
+# MinIO Console at http://172.17.0.1:9101 (minioadmin/minioadmin)
 ```
 
 ## Configuration

@@ -26,3 +26,12 @@ TODO.md
 data/
 docs/superpowers/
 local/
+
+# Execution state: transient, and the plan is what survives
+.agents/work/
+
+# The local half of .agents/references.md — values that must not be committed (REQ-0011)
+.agents/references.local.md
+
+# Agent material is not published from this repository.
+.agents/

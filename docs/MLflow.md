@@ -110,12 +110,12 @@ pydantic-settings with dev defaults. Override via `.env` file or env vars:
 ```bash
 # .env
 MLFLOW_TRACKING_URI=http://172.17.0.1:5000
-MLFLOW_S3_ENDPOINT_URL=http://172.17.0.1:9000
+MLFLOW_S3_ENDPOINT_URL=http://172.17.0.1:9100
 AWS_ACCESS_KEY_ID=minioadmin
 AWS_SECRET_ACCESS_KEY=minioadmin
 ```
 
-Pipeline tracking config in `config/default_config.yaml`:
+Pipeline tracking config in `src/celine/forecasting/core/config_data/default_config.yaml`:
 
 ```yaml
 tracking:
@@ -178,7 +178,7 @@ meter-forecast cleanup --dry-run                 # preview without deleting
 |---------|-----|
 | No experiments in UI | Check `MLFLOW_TRACKING_URI` matches between training and UI |
 | `NoCredentialsError` | Set `AWS_ACCESS_KEY_ID`/`AWS_SECRET_ACCESS_KEY` in `.env` or settings |
-| `XMinioStorageFull` | MinIO disk full — clean `data/minio/` or increase disk |
+| `XMinioStorageFull` | MinIO disk full — clean the MinIO data volume or increase disk |
 | No metrics logged | `run` command doesn't log CV metrics by default — use `--cv` or check `train_mae_*` |
 | Models not in Models tab | Models are stored as artifacts, not registered. This is by design for incremental training |
 | Feature count mismatch | Previous model had different features (e.g. weather added). Auto-falls back to full retrain |

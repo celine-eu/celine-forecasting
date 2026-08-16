@@ -43,7 +43,9 @@ class Settings(BaseSettings):
     oidc_client_secret: str = "svc-forecast"
 
     # MinIO / S3 artifact store
-    mlflow_s3_endpoint_url: str = "http://172.17.0.1:9000"
+    # 9100, not 9000: this stack's MinIO is published there to stay clear of
+    # celine-ai-assistant's, which holds 9000/9001. See docker-compose.yaml.
+    mlflow_s3_endpoint_url: str = "http://172.17.0.1:9100"
     aws_access_key_id: str = "minioadmin"
     aws_secret_access_key: str = "minioadmin"
 

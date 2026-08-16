@@ -19,8 +19,14 @@ services:
       MINIO_ROOT_USER: minioadmin
       MINIO_ROOT_PASSWORD: minioadmin
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      # 9100/9101 on the host, not the conventional 9000/9001: celine-ai-assistant
+      # publishes its own MinIO on those, and it is part of the platform's default
+      # stack while this one is opt-in. Whichever started second used to fail to
+      # bind, so the two could never be up together. Container-side stays 9000/9001,
+      # so `http://minio:9000` inside this compose network is unaffected — only the
+      # host-facing address moved.
+      - "9100:9000"
+      - "9101:9001"
     volumes:
       - ./data/minio:/data
 
