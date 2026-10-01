@@ -158,3 +158,59 @@ def _mlflow_global_state_guard():
         os.environ.pop("MLFLOW_EXPERIMENT_ID", None)
     else:
         os.environ["MLFLOW_EXPERIMENT_ID"] = prev_env
+
+
+# ── Chronos-2 serving (tests/test_serve_*.py) ──────────────────────────────────
+
+SERVE_WEATHER = ["global_tilted_irradiance", "temperature_2m", "cloud_cover"]
+
+
+@pytest.fixture
+def serve_card_dict() -> dict:
+    """A model_card.json payload as written by notebook 07."""
+    return {
+        "model_name": "chronos2-fleet",
+        "model_version": "fleet-test",
+        "base_model": "amazon/chronos-2",
+        "context_length": 96,
+        "max_horizon": 48,
+        "quantiles": [0.1, 0.25, 0.5, 0.75, 0.9],
+        "covariates": [
+            "hour_sin", "hour_cos", "dow_sin", "dow_cos", "is_holiday", *SERVE_WEATHER
+        ],
+        "weather_covariates": list(SERVE_WEATHER),
+        "local_tz": "Europe/Rome",
+        "train_end": None,
+        "n_devices": 3,
+        "targets": ["grid_export", "grid_import"],
+        "finetune": {"mode": "lora", "steps": 10},
+        "created_at": "2026-09-30T00:00:00Z",
+    }
+
+
+def make_serve_payload(
+    n_series: int = 3, context: int = 48, horizon: int = 24, quantiles: list | None = None
+) -> dict:
+    """A valid POST /forecast body with deterministic synthetic values."""
+    rng = np.random.default_rng(0)
+    body: dict = {
+        "origin": "2026-09-01T00:00:00Z",
+        "horizon": horizon,
+        "weather": {
+            "past": {c: rng.uniform(0, 10, context).round(3).tolist() for c in SERVE_WEATHER},
+            "future": {c: rng.uniform(0, 10, horizon).round(3).tolist() for c in SERVE_WEATHER},
+        },
+        "series": [
+            {"id": f"s{i}", "target": rng.uniform(0, 2, context).round(3).tolist()}
+            for i in range(n_series)
+        ],
+    }
+    if quantiles is not None:
+        body["quantiles"] = quantiles
+    return body
+
+
+@pytest.fixture
+def serve_payload() -> dict:
+    """A valid POST /forecast body (3 series, L=48, horizon=24)."""
+    return make_serve_payload()

@@ -1,0 +1,82 @@
+# Chronos-2 fleet inference server for the GX10 (aarch64, NVIDIA GB10).
+#
+# PyPI torch wheels are CPU-only on aarch64, so the CUDA torch MUST come from the
+# NGC base image and is never reinstalled: every preinstalled package is frozen
+# into a pip constraints file, and chronos-forecasting is installed --no-deps.
+#
+# EXCEPTION: transformers. The base ships transformers 5.x, under which
+# chronos-forecasting 2.2.2 returns silently WRONG forecasts (same weights/inputs/GPU:
+# MAE 2.76 vs 0.96 with 4.x). transformers (+ its tokenizers / huggingface-hub
+# companions) is therefore dropped from the frozen constraints and pinned to the
+# version of uv.lock / the training env; the build fails if it is not 4.57.x.
+# Each model dir should also carry golden.json (deploy/gx10/make_golden.py), checked
+# at startup: CHRONOS_REQUIRE_GOLDEN=true below makes a model without one refuse to start.
+#
+# Build context = repository root:
+#   docker build -f deploy/gx10/Dockerfile.serve -t chronos2-serve:local .
+# Dockerfile.serve.dockerignore (BuildKit) keeps the context to pyproject/README/LICENSE/src.
+FROM nvcr.io/nvidia/vllm:26.08-py3
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    PIP_BREAK_SYSTEM_PACKAGES=1
+
+# Freeze the base image (torch, transformers, numpy, ...) so no later install can
+# upgrade/downgrade what NVIDIA ships.
+RUN python -m pip list --format=freeze > /opt/base-constraints.txt \
+ && python -c "import torch; print('base torch', torch.__version__, torch.version.cuda)"
+
+# Training-env versions (uv.lock): transformers 4.57.6 needs huggingface-hub<1.0.
+ARG TRANSFORMERS_VERSION=4.57.6
+ARG TOKENIZERS_VERSION=0.22.2
+ARG HF_HUB_VERSION=0.36.2
+RUN grep -viE '^(transformers|tokenizers|huggingface[-_]hub)==' /opt/base-constraints.txt \
+      > /opt/serve-constraints.txt \
+ && python -m pip install -c /opt/serve-constraints.txt \
+      "transformers==${TRANSFORMERS_VERSION}" "tokenizers==${TOKENIZERS_VERSION}" \
+      "huggingface-hub==${HF_HUB_VERSION}" \
+ && python -c "import transformers as t; v = t.__version__; print('transformers', v); \
+assert v.startswith('4.57'), f'transformers {v}: chronos-forecasting 2.2.2 needs 4.57.x'"
+
+# Chronos-2 without its declared deps (they would pull a PyPI torch); peft is not
+# needed because the served weights are already merged.
+RUN python -m pip install --no-deps "chronos-forecasting==2.2.2"
+
+# chronos' non-torch deps + what `celine.forecasting` (cli -> package __init__ ->
+# LightGBM backend) and the server import. Versions already in the base win.
+RUN python -m pip install -c /opt/serve-constraints.txt \
+      "accelerate>=0.34" "einops>=0.7" "scikit-learn>=1.6" "transformers==${TRANSFORMERS_VERSION}" \
+      "fastapi>=0.110" "uvicorn>=0.29" "pydantic>=2.6" "python-dateutil>=2.8" \
+      "numpy>=1.24" "pandas>=2.0" "pyarrow>=14" "pyyaml>=6.0" "joblib>=1.3" \
+      "typer>=0.12" "pydantic-settings>=2.0" "lightgbm>=4.0"
+
+WORKDIR /opt/celine-forecasting
+COPY pyproject.toml README.md LICENSE ./
+COPY src ./src
+RUN python -m pip install --no-deps . \
+ && python -c "import chronos, torch, transformers, celine.forecasting.serve.app; \
+assert transformers.__version__.startswith('4.57'), transformers.__version__; \
+print('import ok: torch', torch.__version__, 'transformers', transformers.__version__)"
+
+RUN useradd --uid 10001 --no-create-home --home-dir /tmp --shell /usr/sbin/nologin chronos
+USER chronos
+
+# Weights are read from the read-only /models mount; never reach the Hub.
+ENV HF_HOME=/tmp/hf \
+    HF_HUB_OFFLINE=1 \
+    TRANSFORMERS_OFFLINE=1 \
+    CHRONOS_MODEL_DIR=/models/current \
+    CHRONOS_DEVICE=cuda \
+    CHRONOS_REQUIRE_GOLDEN=true
+
+EXPOSE 8100
+HEALTHCHECK --interval=30s --timeout=5s --start-period=120s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8100/health', timeout=4)"
+
+# Token comes from CHRONOS_TOKEN (docker --env-file); dtype/batch size from
+# CHRONOS_DTYPE / CHRONOS_BATCH_SIZE. CHRONOS_DEVICE=cuda makes startup fail (and the
+# container restart-loop visibly) when no GPU is visible, instead of running on CPU;
+# likewise a failed golden self-check (or no golden.json with CHRONOS_REQUIRE_GOLDEN).
+ENTRYPOINT ["meter-forecast", "serve", "--host", "0.0.0.0", "--port", "8100"]

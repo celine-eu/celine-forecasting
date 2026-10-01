@@ -8,7 +8,7 @@ tasks:
   install:
     desc: Install all dependencies
     cmds:
-      - uv sync --extra mlflow --extra db --extra dev
+      - uv sync --extra mlflow --extra db --extra dev --extra serve
 
   test:
     desc: Run test suite
