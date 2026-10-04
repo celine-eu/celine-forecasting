@@ -1,10 +1,14 @@
 [project]
 name = "celine-mlflow-auth"
 version = "0.1.0"
-description = "CELINE MLflow auth plugin: JWT/oauth2-proxy SSO with Keycloak group mapping"
+description = "CELINE MLflow auth plugin: JWT/oauth2-proxy SSO, access for the platform-admin realm role"
 requires-python = ">=3.12"
 dependencies = [
     "cachetools>=5.0.0",
+    # platform-admin / is_service_account. 2.0.0 is the first release with
+    # `is_platform_admin`; it is unpublished until celine-sdk releases it, so
+    # uv.lock cannot be refreshed before then (develop against the editable checkout).
+    "celine-sdk>=2.0.0",
     "cryptography>=44.0.0",
     "Flask-WTF<2",
     "pyjwt>=2.10.0",

@@ -18,7 +18,11 @@ class TestAuthorizeRequest:
             with (
                 patch(
                     "celine.mlflow_auth.auth.extract_jwt_claims",
-                    return_value={"sub": "alice", "preferred_username": "alice", "groups": ["viewer"]},
+                    return_value={
+                        "sub": "alice",
+                        "preferred_username": "alice",
+                        "realm_access": {"roles": ["platform-admin"]},
+                    },
                 ),
                 patch(
                     "celine.mlflow_auth.auth.resolve_mlflow_user",
@@ -57,7 +61,10 @@ class TestAuthorizeRequest:
             with (
                 patch(
                     "celine.mlflow_auth.auth.extract_jwt_claims",
-                    return_value={"sub": "alice", "groups": []},
+                    return_value={
+                        "sub": "alice",
+                        "organization": {"example-rec": {"groups": ["/admins"]}},
+                    },
                 ),
                 patch(
                     "celine.mlflow_auth.auth.resolve_mlflow_user",
@@ -76,7 +83,11 @@ class TestAuthorizeRequest:
             with (
                 patch(
                     "celine.mlflow_auth.auth.extract_jwt_claims",
-                    return_value={"sub": "bob", "preferred_username": "bob", "groups": ["admin"]},
+                    return_value={
+                        "sub": "bob",
+                        "preferred_username": "bob",
+                        "realm_access": {"roles": ["platform-admin"]},
+                    },
                 ),
                 patch(
                     "celine.mlflow_auth.auth.resolve_mlflow_user",

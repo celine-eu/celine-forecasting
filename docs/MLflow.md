@@ -194,3 +194,24 @@ meter-forecast run -j 1          # sequential (debugging)
 ```
 
 Default from `TRAINING_N_JOBS` env var (default: 4). Set in `.env` or per-invocation with `-j`.
+
+## 9. Access (celine-mlflow-auth)
+
+The MLflow server runs the `celine-auth` app (`mlflow/packages/celine-mlflow-auth`).
+It verifies the Keycloak access token that oauth2-proxy forwards, or a
+`Authorization: Bearer` token, and provisions the MLflow user from it.
+
+| Caller | Grant | MLflow user |
+|--------|-------|-------------|
+| Person with the `platform-admin` realm role (`realm_access.roles`) | admitted | admin |
+| Any other person | **denied** (401) | — |
+| Service account with scope `mlflow.admin` | admitted | admin |
+| Service account with scope `mlflow.read` only | admitted | regular user (`default_permission`) |
+| Service account without an `mlflow.*` scope | **denied** (401) | — |
+| Service account of a client listed in `CELINE_MLFLOW_AUTH_CLI_ADMIN_AZP` (default `celine-cli`) | admitted | admin |
+
+MLflow has no organisation scope, so an organisation's own groups
+(`organization.<alias>.groups`, `admins` included) grant nothing here. A realm
+group in a top-level `groups` claim grants nothing either. Person versus service
+is decided by celine-sdk's `is_service_account`; the client-id shortcut applies to
+service-account tokens only.

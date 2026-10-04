@@ -4,6 +4,7 @@ import secrets
 import threading
 
 from cachetools import TTLCache
+from celine.sdk.auth import PLATFORM_ADMIN_ROLE, is_service_account
 
 from celine.mlflow_auth.groups import resolve_is_admin
 
@@ -42,15 +43,23 @@ def resolve_mlflow_user(store, claims: dict) -> str | None:
         logger.warning("No username in JWT claims (sub=%s)", claims.get("sub"))
         return None
 
-    azp = claims.get("azp")
-    if azp in _CLI_ADMIN_AZP:
+    service = is_service_account(claims)
+    # The admin CLI client is trusted by client id, but only for its own
+    # client-credentials token: a person's token issued through that client is
+    # judged like any other person's (platform-admin or nothing).
+    if service and claims.get("azp") in _CLI_ADMIN_AZP:
         is_admin = True
     else:
         result = resolve_is_admin(claims)
         if result is None:
-            from celine.mlflow_auth.groups import _is_service_account
-            kind = "scopes" if _is_service_account(claims) else "groups"
-            logger.warning("User %s has no matching KC %s — access denied", username, kind)
+            if service:
+                logger.warning("Service %s has no mlflow.* scope — access denied", username)
+            else:
+                logger.warning(
+                    "User %s does not hold the %s realm role — access denied",
+                    username,
+                    PLATFORM_ADMIN_ROLE,
+                )
             return None
         is_admin = result
 

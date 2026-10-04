@@ -5,10 +5,13 @@
 #   - Keycloak running at keycloak.celine.localhost  (celine-policies stack)
 #   - MLflow running at localhost:5000               (docker compose up)
 #
+# Only a holder of the platform-admin realm role gets in; an organisation's own
+# groups (even admins) grant nothing here.
+#
 # Usage:
-#   ./tests/smoke_local.sh              # default: admin user (is_admin=True)
-#   ./tests/smoke_local.sh viewer       # viewer user (is_admin=False)
-#   ./tests/smoke_local.sh editor       # editor user
+#   ./tests/smoke_local.sh              # default: admin (platform-admin, expect 200)
+#   ./tests/smoke_local.sh org-admin    # organisation admins only (expect 401)
+#   ./tests/smoke_local.sh org-viewer   # organisation viewers only (expect 401)
 #
 set -euo pipefail
 
@@ -29,7 +32,7 @@ TOKEN_RESPONSE=$(curl -sf \
   -d "client_secret=${KC_CLIENT_SECRET}" \
   -d "username=${USER}" \
   -d "password=${PASS}" \
-  -d "scope=openid")
+  --data-urlencode "scope=openid email profile organization:*")
 
 ACCESS_TOKEN=$(echo "${TOKEN_RESPONSE}" | python3 -c "import sys,json; print(json.load(sys.stdin)['access_token'])")
 
@@ -40,7 +43,7 @@ token = sys.stdin.read().strip()
 payload = token.split('.')[1]
 payload += '=' * (-len(payload) % 4)
 claims = json.loads(base64.urlsafe_b64decode(payload))
-print(json.dumps({k: claims[k] for k in ('sub','preferred_username','groups','organization') if k in claims}, indent=2))
+print(json.dumps({k: claims[k] for k in ('sub','preferred_username','realm_access','organization') if k in claims}, indent=2))
 "
 
 echo ""

@@ -1,118 +1,116 @@
+"""MLflow access: platform-admin realm role for people, mlflow.* scopes for services.
+
+Claim shapes are the ones the local Keycloak issues through ``oauth2_proxy`` (organisation
+groups keep their leading slash) plus the old shape of a realm ``/admins`` member, which
+must now grant nothing.
+"""
+
 import pytest
 
-from celine.mlflow_auth.groups import _group_name, _is_service_account, resolve_is_admin
+from celine.mlflow_auth.groups import resolve_is_admin
+
+PLATFORM_ADMIN = {
+    "azp": "oauth2_proxy",
+    "preferred_username": "admin",
+    "email": "admin@example.org",
+    "realm_access": {"roles": ["platform-admin"]},
+    "organization": {"example-rec": {"type": ["rec"], "groups": ["/admins"]}},
+}
+ORG_ADMIN = {
+    "azp": "oauth2_proxy",
+    "preferred_username": "org-admin",
+    "realm_access": {"roles": ["default-roles-celine", "offline_access", "uma_authorization"]},
+    "organization": {"example-rec": {"type": ["rec"], "groups": ["/admins"]}},
+}
+LEGACY_REALM_ADMIN = {
+    "azp": "oauth2_proxy",
+    "preferred_username": "legacy-admin",
+    "email": "legacy-admin@example.org",
+    "groups": ["/admins", "admins"],
+    "realm_access": {"roles": ["admin"]},
+    "organization": {"example-rec": {"type": ["rec"], "groups": ["/admins"]}},
+}
 
 
-class TestGroupName:
-    def test_simple(self):
-        assert _group_name("admins") == "admins"
+class TestPeople:
+    def test_platform_admin_is_admin(self):
+        assert resolve_is_admin(PLATFORM_ADMIN) is True
 
-    def test_path_prefix(self):
-        assert _group_name("/admins") == "admins"
+    def test_platform_admin_without_any_organisation(self):
+        claims = {"preferred_username": "ops", "realm_access": {"roles": ["platform-admin"]}}
+        assert resolve_is_admin(claims) is True
 
-    def test_nested_path(self):
-        assert _group_name("/realm/roles/admins") == "admins"
-
-    def test_trailing_slash(self):
-        assert _group_name("admins/") == "admins"
-
-    def test_empty(self):
-        assert _group_name("") == ""
-
-
-class TestResolveIsAdmin:
-    @pytest.mark.parametrize("group", [
-        "admin", "admins", "realm_admin", "realm_manager", "manager", "managers",
-    ])
-    def test_admin_groups(self, group):
-        assert resolve_is_admin({"groups": [group]}) is True
-
-    @pytest.mark.parametrize("group", [
-        "admin", "admins", "realm_admin", "realm_manager", "manager", "managers",
-    ])
-    def test_admin_groups_with_path_prefix(self, group):
-        assert resolve_is_admin({"groups": [f"/some/path/{group}"]}) is True
-
-    @pytest.mark.parametrize("group", [
-        "viewer", "viewers", "editor", "editors", "member", "participant", "user",
-    ])
-    def test_non_admin_groups(self, group):
-        assert resolve_is_admin({"groups": [group]}) is False
-
-    def test_mixed_groups_admin_wins(self):
-        assert resolve_is_admin({"groups": ["viewer", "admin"]}) is True
-
-    def test_empty_groups_denied(self):
-        assert resolve_is_admin({"groups": []}) is None
-
-    def test_null_groups_denied(self):
-        assert resolve_is_admin({}) is None
-
-    def test_groups_key_none_denied(self):
-        assert resolve_is_admin({"groups": None}) is None
-
-    def test_string_group_coerced_to_list(self):
-        assert resolve_is_admin({"groups": "admin"}) is True
-
-    def test_string_non_admin_group(self):
-        assert resolve_is_admin({"groups": "viewer"}) is False
-
-
-class TestOrgOnlyDenied:
-    """Users with only org-level membership (no realm groups) are denied."""
-
-    def test_org_only_no_realm_groups(self):
+    def test_platform_admin_among_other_roles(self):
         claims = {
-            "organization": {"example_dso": {"groups": ["admins"]}},
-        }
-        assert resolve_is_admin(claims) is None
-
-    def test_org_only_empty_realm_groups(self):
-        claims = {
-            "groups": [],
-            "organization": {"example_rec": {"groups": ["viewers"]}},
-        }
-        assert resolve_is_admin(claims) is None
-
-    def test_org_only_null_realm_groups(self):
-        claims = {
-            "groups": None,
-            "organization": {"example_dso": {"groups": ["managers"]}},
-        }
-        assert resolve_is_admin(claims) is None
-
-    def test_realm_plus_org_allowed(self):
-        claims = {
-            "groups": ["/viewers"],
-            "organization": {"example_dso": {"groups": ["admins"]}},
-        }
-        assert resolve_is_admin(claims) is False
-
-    def test_realm_admin_plus_org_allowed(self):
-        claims = {
-            "groups": ["/admins"],
-            "organization": {"example_dso": {"groups": ["viewers"]}},
+            "preferred_username": "ops",
+            "realm_access": {"roles": ["default-roles-celine", "platform-admin"]},
         }
         assert resolve_is_admin(claims) is True
 
+    def test_organisation_admin_is_denied(self):
+        assert resolve_is_admin(ORG_ADMIN) is None
 
-class TestServiceAccountDetection:
-    def test_client_id_present(self):
-        assert _is_service_account({"client_id": "svc-forecast"}) is True
+    @pytest.mark.parametrize("group", ["/admins", "/managers", "/editors", "/viewers"])
+    def test_any_organisation_group_is_denied(self, group):
+        claims = {
+            "preferred_username": "alice",
+            "organization": {"example-dso": {"groups": [group]}},
+        }
+        assert resolve_is_admin(claims) is None
 
-    def test_no_username_no_email(self):
-        assert _is_service_account({"azp": "svc-forecast", "scope": "mlflow.admin"}) is True
+    def test_organisation_group_named_like_the_role_is_denied(self):
+        claims = {
+            "preferred_username": "alice",
+            "organization": {"example-rec": {"groups": ["/platform-admin"]}},
+        }
+        assert resolve_is_admin(claims) is None
 
-    def test_user_with_username(self):
-        assert _is_service_account({"preferred_username": "alice"}) is False
+    def test_legacy_realm_admin_group_grants_nothing(self):
+        assert resolve_is_admin(LEGACY_REALM_ADMIN) is None
 
-    def test_user_with_email(self):
-        assert _is_service_account({"email": "alice@example.com"}) is False
+    @pytest.mark.parametrize(
+        "groups",
+        [
+            ["/admins"], ["admins"], ["admin"], ["/managers"], ["managers"], ["/viewers"],
+            ["realm_admin"], ["realm_manager"], ["platform-admin"], ["/platform-admin"],
+        ],
+    )
+    def test_realm_group_claim_grants_nothing(self, groups):
+        assert resolve_is_admin({"preferred_username": "alice", "groups": groups}) is None
+
+    @pytest.mark.parametrize("role", ["admin", "manager", "editor", "viewer", "admins"])
+    def test_other_realm_roles_grant_nothing(self, role):
+        claims = {"preferred_username": "alice", "realm_access": {"roles": [role]}}
+        assert resolve_is_admin(claims) is None
+
+    def test_role_outside_realm_access_grants_nothing(self):
+        claims = {
+            "preferred_username": "alice",
+            "roles": ["platform-admin"],
+            "resource_access": {"oauth2_proxy": {"roles": ["platform-admin"]}},
+        }
+        assert resolve_is_admin(claims) is None
+
+    @pytest.mark.parametrize(
+        "realm_access",
+        [None, {}, {"roles": None}, {"roles": "platform-admin"}, "platform-admin"],
+    )
+    def test_malformed_realm_access_denied(self, realm_access):
+        claims = {"preferred_username": "alice", "realm_access": realm_access}
+        assert resolve_is_admin(claims) is None
+
+    def test_no_claims_beyond_identity_denied(self):
+        assert resolve_is_admin({"preferred_username": "alice"}) is None
+
+    def test_user_with_mlflow_scope_is_still_judged_on_the_role(self):
+        claims = {"preferred_username": "alice", "scope": "openid mlflow.admin"}
+        assert resolve_is_admin(claims) is None
 
 
 class TestServiceAccountScopes:
+    # Keycloak 26 encodes the grant in `jti`; `trrtcc:` is client credentials.
     def _svc_claims(self, scope: str) -> dict:
-        return {"azp": "svc-forecast", "scope": scope}
+        return {"azp": "svc-forecast", "jti": "trrtcc:0000", "scope": scope}
 
     def test_admin_scope(self):
         assert resolve_is_admin(self._svc_claims("mlflow.admin")) is True
@@ -130,12 +128,25 @@ class TestServiceAccountScopes:
         assert resolve_is_admin(self._svc_claims("")) is None
 
     def test_no_scope_claim_denied(self):
-        assert resolve_is_admin({"azp": "svc-forecast"}) is None
+        assert resolve_is_admin({"azp": "svc-forecast", "jti": "trrtcc:0000"}) is None
 
-    def test_token_with_groups_treated_as_user(self):
-        claims = {"azp": "svc-forecast", "scope": "mlflow.read", "groups": ["/admins"]}
-        assert resolve_is_admin(claims) is True  # groups present → user path → admin group wins
+    def test_non_string_scope_denied(self):
+        assert resolve_is_admin({**self._svc_claims(""), "scope": ["mlflow.admin"]}) is None
 
     def test_client_id_claim_uses_scope_path(self):
-        claims = {"client_id": "svc-forecast", "scope": "mlflow.admin"}
-        assert resolve_is_admin(claims) is True
+        assert resolve_is_admin({"client_id": "svc-forecast", "scope": "mlflow.admin"}) is True
+
+    def test_service_account_username_uses_scope_path(self):
+        claims = {"preferred_username": "service-account-svc-forecast", "scope": "mlflow.read"}
+        assert resolve_is_admin(claims) is False
+
+    def test_platform_admin_role_on_a_service_does_not_replace_scopes(self):
+        claims = {
+            **self._svc_claims("dataset.query"),
+            "realm_access": {"roles": ["platform-admin"]},
+        }
+        assert resolve_is_admin(claims) is None
+
+    def test_token_with_realm_group_is_a_person_and_the_group_grants_nothing(self):
+        claims = {"azp": "svc-forecast", "scope": "mlflow.read", "groups": ["/admins"]}
+        assert resolve_is_admin(claims) is None

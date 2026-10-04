@@ -36,5 +36,6 @@ edited to say something else.
 
 ## The records
 
-<TODO: a one-line table as they accumulate. An index nobody updates is worse than none,
-so either keep it or delete this section.>
+| | |
+|---|---|
+| [ADR-0001](ADR-0001-mlflow-admits-only-platform-administrators-and-scoped-services.md) | MLflow admits only platform administrators and scoped services |
