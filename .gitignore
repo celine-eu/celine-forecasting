@@ -18,6 +18,7 @@ venv/
 
 *.log
 mlflow.db
+runs/
 mlruns/
 
 *.local.yaml
