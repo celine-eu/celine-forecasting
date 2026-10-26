@@ -1,0 +1,8 @@
+# Allowlist: the image only needs the package source and its build metadata.
+*
+!pyproject.toml
+!README.md
+!LICENSE
+!src/
+**/__pycache__
+**/*.pyc

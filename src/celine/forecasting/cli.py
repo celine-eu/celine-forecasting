@@ -650,6 +650,95 @@ def cleanup(
     typer.echo(f"Deleted {deleted} run(s) older than {retention_days} days.")
 
 
+
+def _read_token(token_file: Path | None) -> str:
+    """Return the bearer token from ``token_file`` or ``$CHRONOS_TOKEN`` ('' if none).
+
+    The file may hold the bare token or a docker env-file line ``CHRONOS_TOKEN=<token>``.
+    """
+    if token_file is None:
+        return os.environ.get("CHRONOS_TOKEN", "").strip()
+    raw = token_file.read_text().strip()
+    prefix = "CHRONOS_TOKEN="
+    return raw[len(prefix) :].strip() if raw.startswith(prefix) else raw
+
+
+@app.command()
+def serve(
+    model_dir: Annotated[
+        Path,
+        typer.Option(
+            envvar="CHRONOS_MODEL_DIR", help="Model dir (model_card.json + merged weights)"
+        ),
+    ],
+    host: Annotated[str, typer.Option(envvar="CHRONOS_HOST", help="Bind address")] = "127.0.0.1",
+    port: Annotated[int, typer.Option(envvar="CHRONOS_PORT", help="Bind port")] = 8100,
+    dtype: Annotated[
+        str,
+        typer.Option(envvar="CHRONOS_DTYPE", help="Weights dtype: float32, bfloat16 or float16"),
+    ] = "float32",
+    batch_size: Annotated[
+        int, typer.Option(envvar="CHRONOS_BATCH_SIZE", help="predict_quantiles batch size")
+    ] = 256,
+    device: Annotated[
+        str,
+        typer.Option(
+            envvar="CHRONOS_DEVICE",
+            help="auto (GPU if available), cuda (fail fast without a GPU) or cpu",
+        ),
+    ] = "auto",
+    token_file: Annotated[
+        Path | None,
+        typer.Option(help="File with the bearer token (default: $CHRONOS_TOKEN)"),
+    ] = None,
+    require_golden: Annotated[
+        bool,
+        typer.Option(
+            envvar="CHRONOS_REQUIRE_GOLDEN",
+            help="Refuse to start when the model dir has no golden.json "
+            "(a present golden.json is always checked)",
+        ),
+    ] = False,
+    verbose: Verbose = False,
+) -> None:
+    """Serve the Chronos-2 fleet model over HTTP (POST /forecast, bearer auth).
+
+    At startup the model is loaded and, if ``<model-dir>/golden.json`` exists,
+    its request is replayed and compared with the reference forecasts; a
+    mismatch (or a missing golden with ``--require-golden``) exits with code 1.
+    """
+    _setup_logging(verbose)
+    token = _read_token(token_file)
+    if not token:
+        typer.echo("Refusing to start: set CHRONOS_TOKEN or pass --token-file.", err=True)
+        raise typer.Exit(2)
+
+    import uvicorn
+
+    from .serve.app import create_app
+    from .serve.model import ChronosServingModel
+
+    try:
+        model = ChronosServingModel(
+            model_dir,
+            dtype=dtype,
+            batch_size=batch_size,
+            device=device,
+            require_golden=require_golden,
+        )
+        model.load()
+    except (ValueError, RuntimeError) as exc:
+        typer.echo(f"Refusing to start: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    info = model.runtime_info()
+    logger.info(
+        "serving %s %s on %s:%d (device=%s dtype=%s golden=%s)",
+        model.card.model_name, model.card.model_version, host, port,
+        info["device"], info["dtype"], info["golden"],
+    )
+    uvicorn.run(create_app(model, token), host=host, port=port, log_level="info")
+
+
 def main() -> None:
     app()
 
