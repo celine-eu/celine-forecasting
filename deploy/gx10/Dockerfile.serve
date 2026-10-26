@@ -12,8 +12,12 @@
 # Each model dir should also carry golden.json (deploy/gx10/make_golden.py), checked
 # at startup: CHRONOS_REQUIRE_GOLDEN=true below makes a model without one refuse to start.
 #
-# Build context = repository root:
-#   docker build -f deploy/gx10/Dockerfile.serve -t chronos2-serve:local .
+# Build context = repository root, from a clean checkout of a git tag (assessment C3):
+#   git checkout "$TAG" && test -z "$(git status --porcelain)"
+#   docker build -f deploy/gx10/Dockerfile.serve -t "chronos2-serve:$TAG" \
+#     --build-arg SOURCE_COMMIT="$(git rev-parse HEAD)" --build-arg SOURCE_TAG="$TAG" .
+# then record the image ID and commit next to model_card.json with
+# deploy/gx10/record_provenance.py (it refuses an image whose label is not the tag's commit).
 # Dockerfile.serve.dockerignore (BuildKit) keeps the context to pyproject/README/LICENSE/src.
 FROM nvcr.io/nvidia/vllm:26.08-py3
 
@@ -59,6 +63,14 @@ RUN python -m pip install --no-deps . \
  && python -c "import chronos, torch, transformers, celine.forecasting.serve.app; \
 assert transformers.__version__.startswith('4.57'), transformers.__version__; \
 print('import ok: torch', torch.__version__, 'transformers', transformers.__version__)"
+
+# Provenance: the source the image was built from (empty when built without the args,
+# which record_provenance.py refuses). Declared late so the layers above stay cached.
+ARG SOURCE_COMMIT=""
+ARG SOURCE_TAG=""
+LABEL org.opencontainers.image.source="https://github.com/celine-eu/celine-forecasting" \
+      org.opencontainers.image.revision="${SOURCE_COMMIT}" \
+      org.opencontainers.image.version="${SOURCE_TAG}"
 
 RUN useradd --uid 10001 --no-create-home --home-dir /tmp --shell /usr/sbin/nologin chronos
 USER chronos

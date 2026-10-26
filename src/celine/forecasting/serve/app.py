@@ -5,6 +5,8 @@ Endpoints:
     GET  /model     bearer auth; the model card.
     POST /forecast  bearer auth; fleet quantile forecast.
 
+``/docs``, ``/redoc`` and ``/openapi.json`` are disabled (404).
+
 Inference runs in the threadpool and model calls are serialised with a lock,
 so one GPU forward pass runs at a time while the event loop stays responsive.
 Only counts and latency are logged, never series values.
@@ -79,7 +81,15 @@ def create_app(model: Predictor, token: str, *, max_body_bytes: int = MAX_BODY_B
     expected = token.encode()
     lock = threading.Lock()
     bearer = HTTPBearer(auto_error=False)
-    app = FastAPI(title="Chronos-2 fleet forecast", version=model.card.model_version)
+    # No OpenAPI schema, Swagger UI or ReDoc: they are unauthenticated and no
+    # client needs them (assessment 2026-10-23, item C3).
+    app = FastAPI(
+        title="Chronos-2 fleet forecast",
+        version=model.card.model_version,
+        docs_url=None,
+        redoc_url=None,
+        openapi_url=None,
+    )
 
     # Default-arg form: ``bearer`` is local, so an ``Annotated`` hint would not
     # resolve under ``from __future__ import annotations``.

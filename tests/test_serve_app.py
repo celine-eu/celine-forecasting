@@ -68,6 +68,21 @@ def test_model_and_forecast_require_bearer_token(
     assert client.post("/forecast", json=serve_payload, headers=headers).status_code == 401
 
 
+@pytest.mark.parametrize("path", ["/docs", "/redoc", "/openapi.json", "/docs/oauth2-redirect"])
+@pytest.mark.parametrize("headers", [{}, AUTH], ids=["anonymous", "with-token"])
+def test_api_docs_and_schema_are_not_served(client: TestClient, path: str, headers: dict) -> None:
+    """Assessment C3: the schema and interactive docs are off, token or not."""
+    assert client.get(path, headers=headers).status_code == 404
+
+
+def test_disabled_docs_leave_health_and_auth_unchanged(
+    client: TestClient, serve_payload: dict
+) -> None:
+    assert client.get("/health").status_code == 200
+    assert client.post("/forecast", json=serve_payload).status_code == 401
+    assert client.post("/forecast", json=serve_payload, headers=AUTH).status_code == 200
+
+
 def test_model_returns_card(client: TestClient, serve_card_dict: dict) -> None:
     resp = client.get("/model", headers=AUTH)
     assert resp.status_code == 200
