@@ -42,6 +42,8 @@ logger = logging.getLogger(__name__)
 #: Default Open-Meteo endpoints (overridable via config ``weather.*_url``).
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+#: Archived model runs (ICON-D2 etc. back to 2022), used when a ``model`` is pinned.
+HISTORICAL_FORECAST_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
 
 #: Raw hourly variables requested from Open-Meteo. Everything else is derived.
 RAW_HOURLY_VARS = (
@@ -274,8 +276,10 @@ def download_raw_weather(
     panel_tilt: float = 30.0,
     panel_azimuth: float = 0.0,
     elevation: float | None = None,
+    model: str | None = None,
     archive_url: str = ARCHIVE_URL,
     forecast_url: str = FORECAST_URL,
+    historical_forecast_url: str = HISTORICAL_FORECAST_URL,
     timeout: int = 60,
     hourly_vars: tuple[str, ...] = RAW_HOURLY_VARS,
 ) -> pd.DataFrame:
@@ -285,6 +289,11 @@ def download_raw_weather(
     (ERA5, lags ~5 days) and the **forecast** endpoint (recent past + up to 16
     days ahead), so a single call covers both a training history and the future
     horizon needed for a 48-hour forecast.
+
+    With ``model`` set (e.g. ``"icon_d2"``) every request pins that model: the
+    history up to today comes from the **historical forecast** endpoint instead of
+    the ERA5 archive, the future from the forecast endpoint, and where the two
+    overlap the history wins.
 
     Args:
         latitude: Site latitude (degrees north).
@@ -297,8 +306,11 @@ def download_raw_weather(
             DEM auto-detection — important in mountainous terrain where the grid
             cell average misrepresents the site (affects temperature lapse-rate
             downscaling and the derived PV-temperature / degree-day features).
+        model: Open-Meteo weather model to pin (``models=`` parameter); ``None``
+            keeps the ERA5 archive + best-match forecast behaviour.
         archive_url: Override for the archive endpoint.
         forecast_url: Override for the forecast endpoint.
+        historical_forecast_url: Override for the historical forecast endpoint.
         timeout: Per-request socket timeout in seconds.
         hourly_vars: Raw hourly variables to request.
 
@@ -323,15 +335,24 @@ def download_raw_weather(
     }
     if elevation is not None:
         common["elevation"] = elevation
+    if model is not None:
+        common["models"] = model
 
     frames: list[pd.DataFrame] = []
-    archive_end = min(end_ts.normalize(), today - pd.Timedelta(days=_ARCHIVE_LAG_DAYS))
+    if model is None:
+        history_url = archive_url
+        archive_end = min(end_ts.normalize(), today - pd.Timedelta(days=_ARCHIVE_LAG_DAYS))
+    else:
+        # The historical forecast endpoint has no ERA5-style lag.
+        history_url = historical_forecast_url
+        archive_end = min(end_ts.normalize(), today)
 
-    # Historical portion via the archive endpoint.
+    # Historical portion via the archive (or historical forecast) endpoint.
+    history: pd.DataFrame | None = None
     if start_ts.normalize() <= archive_end:
         try:
             payload = _get_json(
-                archive_url,
+                history_url,
                 {
                     **common,
                     "start_date": start_ts.strftime("%Y-%m-%d"),
@@ -339,9 +360,13 @@ def download_raw_weather(
                 },
                 timeout=timeout,
             )
-            frames.append(_hourly_to_frame(payload))
+            history = _hourly_to_frame(payload)
         except Exception as exc:  # pragma: no cover - network failure path
             logger.warning("Archive weather request failed: %s", exc)
+    # Later frames win the dedup below: forecast over ERA5, but history over a
+    # pinned model's forecast.
+    if history is not None and model is None:
+        frames.append(history)
 
     # Recent-past + future portion via the forecast endpoint.
     if end_ts.normalize() > archive_end:
@@ -356,6 +381,8 @@ def download_raw_weather(
             frames.append(_hourly_to_frame(payload))
         except Exception as exc:  # pragma: no cover - network failure path
             logger.warning("Forecast weather request failed: %s", exc)
+    if history is not None and model is not None:
+        frames.append(history)
 
     frames = [f for f in frames if not f.empty]
     if not frames:
@@ -395,8 +422,10 @@ def download_weather_features(
     cooling_base_c: float = 24.0,
     pv_temp_coeff: float = 0.004,
     pv_temp_ref_c: float = 25.0,
+    model: str | None = None,
     archive_url: str = ARCHIVE_URL,
     forecast_url: str = FORECAST_URL,
+    historical_forecast_url: str = HISTORICAL_FORECAST_URL,
     timeout: int = 60,
 ) -> pd.DataFrame:
     """Download and build model-ready weather features for a position.
@@ -417,8 +446,10 @@ def download_weather_features(
         cooling_base_c: Base temperature for cooling-degree hours.
         pv_temp_coeff: PV power temperature coefficient.
         pv_temp_ref_c: Reference cell temperature for ``pv_temp_factor``.
+        model: Open-Meteo weather model to pin (see :func:`download_raw_weather`).
         archive_url: Override for the archive endpoint.
         forecast_url: Override for the forecast endpoint.
+        historical_forecast_url: Override for the historical forecast endpoint.
         timeout: Per-request socket timeout in seconds.
 
     Returns:
@@ -432,8 +463,10 @@ def download_weather_features(
         panel_tilt=panel_tilt,
         panel_azimuth=panel_azimuth,
         elevation=elevation,
+        model=model,
         archive_url=archive_url,
         forecast_url=forecast_url,
+        historical_forecast_url=historical_forecast_url,
         timeout=timeout,
     )
     return build_weather_features(
