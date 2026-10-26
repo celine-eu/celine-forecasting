@@ -22,6 +22,16 @@ logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", message="Mean of empty slice", category=RuntimeWarning)
 
 
+def observable_day_lags(horizon: int, max_days: int = 7) -> list[int]:
+    """Day lags ``d`` in ``1..max_days`` whose value is known at the forecast origin.
+
+    For a target hour ``t`` forecast ``horizon`` hours ahead, the same-hour value
+    ``d`` days back sits at ``t - 24d``; it lies at or before the origin only when
+    ``24 * d >= horizon``. Empty when the horizon reaches past the whole window.
+    """
+    return [d for d in range(1, max_days + 1) if 24 * d >= horizon]
+
+
 def _weather_key(target: str, has_pv: bool) -> str:
     """Map (target, has_pv) to the config key for its weather feature subset."""
     if target == "grid_export":
@@ -161,14 +171,19 @@ def prepare_training_data(
         hdf[f"{target}_same_hour_7d"] = ref_7d.map(ts_target).values
         hdf[f"{target}_same_hour_14d"] = ref_14d.map(ts_target).values
 
+        # Only day lags at or before the origin: for h > 24 the 1-day lag lies in
+        # the future, and serving (which has no data past the origin) never sees it.
         day_cols = [
             (df_sorted[COL_TS_HOUR] - pd.Timedelta(hours=d * 24)).map(ts_target).values
-            for d in range(1, 8)
+            for d in observable_day_lags(h)
         ]
-        with warnings.catch_warnings():
-            # Early rows have no history → all-NaN slice; NaN mean is intended.
-            warnings.simplefilter("ignore", RuntimeWarning)
-            hdf[f"{target}_mean_same_hour_7d"] = np.nanmean(np.column_stack(day_cols), axis=1)
+        if day_cols:
+            with warnings.catch_warnings():
+                # Early rows have no history → all-NaN slice; NaN mean is intended.
+                warnings.simplefilter("ignore", RuntimeWarning)
+                hdf[f"{target}_mean_same_hour_7d"] = np.nanmean(np.column_stack(day_cols), axis=1)
+        else:
+            hdf[f"{target}_mean_same_hour_7d"] = np.nan
         hdf[f"{target}_diff_1d"] = hdf[f"{target}_same_hour_1d"] - hdf[f"{target}_same_hour_2d"]
         hdf[f"{target}_diff_7d"] = hdf[f"{target}_same_hour_7d"] - hdf[f"{target}_same_hour_14d"]
 

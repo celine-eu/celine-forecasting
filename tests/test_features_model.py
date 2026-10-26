@@ -15,6 +15,7 @@ from celine.forecasting.models.lightgbm._train import (
 from celine.forecasting.models.lightgbm.features import (
     build_monotonic_constraints,
     get_features_for_target,
+    observable_day_lags,
 )
 
 
@@ -98,3 +99,13 @@ def test_train_band_models_returns_bundle(raw_meters, raw_weather, config):
     assert set(models) == set(config.horizon_bands)
     for band in models.values():
         assert {"main", "q25", "q75", "cqr_threshold"} <= set(band)
+
+
+def test_observable_day_lags_keep_only_lags_known_at_origin():
+    """A day lag d is observable at horizon h only when 24*d >= h."""
+    assert observable_day_lags(1) == [1, 2, 3, 4, 5, 6, 7]
+    assert observable_day_lags(24) == [1, 2, 3, 4, 5, 6, 7]
+    assert observable_day_lags(25) == [2, 3, 4, 5, 6, 7]
+    assert observable_day_lags(48) == [2, 3, 4, 5, 6, 7]
+    assert observable_day_lags(168) == [7]
+    assert observable_day_lags(169) == []

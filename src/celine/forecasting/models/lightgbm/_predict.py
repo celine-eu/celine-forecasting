@@ -15,7 +15,7 @@ import pandas as pd
 
 from ...core.config import ForecastConfig
 from ...core.schema import COL_TS_HOUR
-from .features import get_features_for_target
+from .features import get_features_for_target, observable_day_lags
 
 logger = logging.getLogger(__name__)
 
@@ -102,7 +102,9 @@ def generate_forecast(
         lags["same_hour_3d"].append(ts_lookup.get(ft - pd.Timedelta(hours=72), np.nan))
         lags["same_hour_7d"].append(ts_lookup.get(ft - pd.Timedelta(hours=168), np.nan))
         lags["same_hour_14d"].append(ts_lookup.get(ft - pd.Timedelta(hours=336), np.nan))
-        day_vals = [ts_lookup.get(ft - pd.Timedelta(hours=d * 24), np.nan) for d in range(1, 8)]
+        day_vals = [
+            ts_lookup.get(ft - pd.Timedelta(hours=d * 24), np.nan) for d in observable_day_lags(h)
+        ]
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
             mean_same_hour_7d.append(float(np.nanmean(day_vals)))
