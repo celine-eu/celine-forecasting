@@ -188,7 +188,12 @@ def _resolve_weather(
         return None
 
     from .core.cleaning import aggregate_to_hourly
-    from .core.weather import download_weather_features
+    from .core.weather import (
+        ARCHIVE_URL,
+        FORECAST_URL,
+        HISTORICAL_FORECAST_URL,
+        download_weather_features,
+    )
 
     hourly = aggregate_to_hourly(df_meters, config)
     start = hourly[COL_TS_HOUR].min()
@@ -196,6 +201,7 @@ def _resolve_weather(
     logger.info("Downloading weather for lat=%.4f lon=%.4f (%s..%s)", lat, lon, start, end)
     weather_cfg = config.raw.get("weather", {}) or {}
     elevation = weather_cfg.get("elevation")
+    model = weather_cfg.get("model")
     return download_weather_features(
         lat,
         lon,
@@ -208,6 +214,10 @@ def _resolve_weather(
         cooling_base_c=float(weather_cfg.get("cooling_base_c", 24.0)),
         pv_temp_coeff=float(weather_cfg.get("pv_temp_coeff", 0.004)),
         pv_temp_ref_c=float(weather_cfg.get("pv_temp_ref_c", 25.0)),
+        model=str(model) if model is not None else None,
+        archive_url=str(weather_cfg.get("archive_url", ARCHIVE_URL)),
+        forecast_url=str(weather_cfg.get("forecast_url", FORECAST_URL)),
+        historical_url=str(weather_cfg.get("historical_url", HISTORICAL_FORECAST_URL)),
     )
 
 

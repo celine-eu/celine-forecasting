@@ -9,8 +9,8 @@ longitude** — no weather file, no feature engineering of their own.
 Two layers, cleanly separated so the pure logic is testable without a network:
 
 * :func:`download_raw_weather` — pull raw hourly variables from the free
-  `Open-Meteo <https://open-meteo.com/>`_ API (historical archive + forecast),
-  using only the standard library.
+  `Open-Meteo <https://open-meteo.com/>`_ API (history + forecast, optionally
+  pinned to one weather model such as ``icon_d2``), using only the stdlib.
 * :func:`build_weather_features` — turn those raw variables into the 12 features
   the models expect (solar geometry, clear-sky index, degree-days, …). Pure
   NumPy/pandas, no I/O.
@@ -42,6 +42,9 @@ logger = logging.getLogger(__name__)
 #: Default Open-Meteo endpoints (overridable via config ``weather.*_url``).
 ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive"
 FORECAST_URL = "https://api.open-meteo.com/v1/forecast"
+#: Past runs of a *named* weather model (e.g. ``icon_d2``) — used instead of the
+#: ERA5 archive when ``model`` is set, so history and forecast share one model.
+HISTORICAL_FORECAST_URL = "https://historical-forecast-api.open-meteo.com/v1/forecast"
 
 #: Raw hourly variables requested from Open-Meteo. Everything else is derived.
 RAW_HOURLY_VARS = (
@@ -265,6 +268,74 @@ def _hourly_to_frame(payload: dict) -> pd.DataFrame:
     return frame
 
 
+def _merge_history_first(history: pd.DataFrame, forecast: pd.DataFrame) -> pd.DataFrame:
+    """Combine a historical and a forecast frame, letting history win.
+
+    Both frames are indexed by ``datetime``; wherever history holds a non-null
+    value it is kept, and the forecast frame only fills nulls and timestamps
+    history does not cover (:meth:`pandas.DataFrame.combine_first` semantics).
+
+    Args:
+        history: Historical hourly frame (may be empty).
+        forecast: Forecast hourly frame (may be empty).
+
+    Returns:
+        The merged frame with ``datetime`` back as a sorted column. Column order
+        follows ``history`` first, then any forecast-only columns.
+    """
+    parts = [f for f in (history, forecast) if not f.empty]
+    if len(parts) == 1:
+        merged = parts[0].drop_duplicates(subset=[COL_WEATHER_TIME], keep="last")
+    else:
+        indexed = [
+            f.drop_duplicates(subset=[COL_WEATHER_TIME], keep="last").set_index(COL_WEATHER_TIME)
+            for f in parts
+        ]
+        order = list(dict.fromkeys([*indexed[0].columns, *indexed[1].columns]))
+        merged = indexed[0].combine_first(indexed[1])[order].reset_index()
+    return merged.sort_values(COL_WEATHER_TIME).reset_index(drop=True)
+
+
+def _drop_empty_rows(raw: pd.DataFrame, hourly_vars: tuple[str, ...]) -> pd.DataFrame:
+    """Drop hourly rows that are null across *every* requested variable.
+
+    These come from the forecast endpoint when the requested window runs past
+    the weather model's horizon (e.g. 48 h for ICON-D2): the API pads the reply
+    with all-null rows rather than truncating it. Remaining partial nulls are
+    logged so downstream zero-filling is visible.
+
+    Args:
+        raw: Hourly frame with a ``datetime`` column.
+        hourly_vars: The variables that were requested.
+
+    Returns:
+        ``raw`` without the all-null rows.
+    """
+    present = [var for var in hourly_vars if var in raw.columns]
+    if not present:
+        return raw
+
+    empty = raw[present].isna().all(axis=1)
+    if empty.any():
+        dropped = raw.loc[empty, COL_WEATHER_TIME]
+        logger.warning(
+            "Dropping %d hourly weather row(s) with no data at all (%s..%s) — "
+            "most likely past the weather model's forecast horizon",
+            int(empty.sum()),
+            dropped.min(),
+            dropped.max(),
+        )
+        raw = raw.loc[~empty]
+
+    nulls = raw[present].isna().sum()
+    nulls = nulls[nulls > 0]
+    if not nulls.empty:
+        logger.warning(
+            "Hourly weather still has missing values after merging: %s", nulls.to_dict()
+        )
+    return raw
+
+
 def download_raw_weather(
     latitude: float,
     longitude: float,
@@ -274,17 +345,30 @@ def download_raw_weather(
     panel_tilt: float = 30.0,
     panel_azimuth: float = 0.0,
     elevation: float | None = None,
+    model: str | None = None,
     archive_url: str = ARCHIVE_URL,
     forecast_url: str = FORECAST_URL,
+    historical_url: str = HISTORICAL_FORECAST_URL,
     timeout: int = 60,
     hourly_vars: tuple[str, ...] = RAW_HOURLY_VARS,
 ) -> pd.DataFrame:
     """Download raw hourly weather covering ``[start, end]`` from Open-Meteo.
 
-    The window is automatically split between the historical **archive** endpoint
-    (ERA5, lags ~5 days) and the **forecast** endpoint (recent past + up to 16
-    days ahead), so a single call covers both a training history and the future
-    horizon needed for a 48-hour forecast.
+    The window is automatically split between a **historical** endpoint and the
+    **forecast** endpoint (recent past + up to 16 days ahead), so a single call
+    covers both a training history and the future horizon needed for a 48-hour
+    forecast. Which historical endpoint is used depends on ``model``:
+
+    * ``model is None`` — the ERA5 **archive** API (~31 km, lags ~5 days).
+    * ``model`` set — the **Historical Forecast API**, i.e. past runs of that
+      same model, so history and forecast are physically consistent.
+
+    On overlapping timestamps the **historical frame wins**; the forecast frame
+    only fills nulls and hours history does not cover. This matters because the
+    forecast endpoint returns all-null rows for the oldest days of a long
+    ``past_days`` window, and for rows past the model's forecast horizon (48 h
+    for ICON-D2). Rows that stay null across *every* requested variable are
+    dropped rather than handed to the feature builder.
 
     Args:
         latitude: Site latitude (degrees north).
@@ -297,8 +381,13 @@ def download_raw_weather(
             DEM auto-detection — important in mountainous terrain where the grid
             cell average misrepresents the site (affects temperature lapse-rate
             downscaling and the derived PV-temperature / degree-day features).
-        archive_url: Override for the archive endpoint.
+        model: Open-Meteo weather model id (e.g. ``"icon_d2"``, the DWD 2.2 km
+            model the CELINE pipeline uses). ``None`` keeps Open-Meteo's default
+            blend and the ERA5 archive for history.
+        archive_url: Override for the ERA5 archive endpoint (no ``model``).
         forecast_url: Override for the forecast endpoint.
+        historical_url: Override for the Historical Forecast endpoint (used when
+            ``model`` is set).
         timeout: Per-request socket timeout in seconds.
         hourly_vars: Raw hourly variables to request.
 
@@ -313,7 +402,7 @@ def download_raw_weather(
     end_ts = _to_utc(end)
     today = pd.Timestamp(datetime.now(UTC)).normalize()
 
-    common = {
+    common: dict[str, object] = {
         "latitude": latitude,
         "longitude": longitude,
         "hourly": ",".join(hourly_vars),
@@ -323,28 +412,37 @@ def download_raw_weather(
     }
     if elevation is not None:
         common["elevation"] = elevation
+    if model is not None:
+        common["models"] = model
 
-    frames: list[pd.DataFrame] = []
-    archive_end = min(end_ts.normalize(), today - pd.Timedelta(days=_ARCHIVE_LAG_DAYS))
+    # The Historical Forecast API serves up to (and including) today; ERA5 lags.
+    if model is None:
+        history_url = archive_url
+        history_end = min(end_ts.normalize(), today - pd.Timedelta(days=_ARCHIVE_LAG_DAYS))
+    else:
+        history_url = historical_url
+        history_end = min(end_ts.normalize(), today)
 
-    # Historical portion via the archive endpoint.
-    if start_ts.normalize() <= archive_end:
+    history = pd.DataFrame()
+    forecast = pd.DataFrame()
+
+    if start_ts.normalize() <= history_end:
         try:
             payload = _get_json(
-                archive_url,
+                history_url,
                 {
                     **common,
                     "start_date": start_ts.strftime("%Y-%m-%d"),
-                    "end_date": archive_end.strftime("%Y-%m-%d"),
+                    "end_date": history_end.strftime("%Y-%m-%d"),
                 },
                 timeout=timeout,
             )
-            frames.append(_hourly_to_frame(payload))
+            history = _hourly_to_frame(payload)
         except Exception as exc:  # pragma: no cover - network failure path
-            logger.warning("Archive weather request failed: %s", exc)
+            logger.warning("Historical weather request failed: %s", exc)
 
     # Recent-past + future portion via the forecast endpoint.
-    if end_ts.normalize() > archive_end:
+    if end_ts.normalize() > history_end:
         past_days = int(min(max((today - start_ts.normalize()).days, 0), _MAX_PAST_DAYS))
         forecast_days = int(min(max((end_ts.normalize() - today).days + 1, 1), _MAX_FORECAST_DAYS))
         try:
@@ -353,31 +451,27 @@ def download_raw_weather(
                 {**common, "past_days": past_days, "forecast_days": forecast_days},
                 timeout=timeout,
             )
-            frames.append(_hourly_to_frame(payload))
+            forecast = _hourly_to_frame(payload)
         except Exception as exc:  # pragma: no cover - network failure path
             logger.warning("Forecast weather request failed: %s", exc)
 
-    frames = [f for f in frames if not f.empty]
-    if not frames:
+    if history.empty and forecast.empty:
         raise RuntimeError(
             "Open-Meteo returned no weather data for "
             f"lat={latitude}, lon={longitude}, {start_ts.date()}..{end_ts.date()}."
         )
 
-    raw = (
-        pd.concat(frames, ignore_index=True)
-        .drop_duplicates(subset=[COL_WEATHER_TIME], keep="last")
-        .sort_values(COL_WEATHER_TIME)
-        .reset_index(drop=True)
-    )
+    raw = _merge_history_first(history, forecast)
     raw = raw[(raw[COL_WEATHER_TIME] >= start_ts) & (raw[COL_WEATHER_TIME] <= end_ts)]
+    raw = _drop_empty_rows(raw, hourly_vars)
     logger.info(
-        "Downloaded %d hourly weather rows (%s..%s) for lat=%.4f lon=%.4f",
+        "Downloaded %d hourly weather rows (%s..%s) for lat=%.4f lon=%.4f model=%s",
         len(raw),
         start_ts.date(),
         end_ts.date(),
         latitude,
         longitude,
+        model or "default",
     )
     return raw.reset_index(drop=True)
 
@@ -395,8 +489,10 @@ def download_weather_features(
     cooling_base_c: float = 24.0,
     pv_temp_coeff: float = 0.004,
     pv_temp_ref_c: float = 25.0,
+    model: str | None = None,
     archive_url: str = ARCHIVE_URL,
     forecast_url: str = FORECAST_URL,
+    historical_url: str = HISTORICAL_FORECAST_URL,
     timeout: int = 60,
 ) -> pd.DataFrame:
     """Download and build model-ready weather features for a position.
@@ -417,8 +513,11 @@ def download_weather_features(
         cooling_base_c: Base temperature for cooling-degree hours.
         pv_temp_coeff: PV power temperature coefficient.
         pv_temp_ref_c: Reference cell temperature for ``pv_temp_factor``.
-        archive_url: Override for the archive endpoint.
+        model: Open-Meteo weather model id (e.g. ``"icon_d2"``); when set,
+            history comes from the Historical Forecast API instead of ERA5.
+        archive_url: Override for the ERA5 archive endpoint.
         forecast_url: Override for the forecast endpoint.
+        historical_url: Override for the Historical Forecast endpoint.
         timeout: Per-request socket timeout in seconds.
 
     Returns:
@@ -432,8 +531,10 @@ def download_weather_features(
         panel_tilt=panel_tilt,
         panel_azimuth=panel_azimuth,
         elevation=elevation,
+        model=model,
         archive_url=archive_url,
         forecast_url=forecast_url,
+        historical_url=historical_url,
         timeout=timeout,
     )
     return build_weather_features(
@@ -476,6 +577,7 @@ def download_weather_for_config(
         return None
 
     elev = weather_cfg.get("elevation")
+    model = weather_cfg.get("model")
     return download_weather_features(
         float(lat),
         float(lon),
@@ -488,7 +590,9 @@ def download_weather_for_config(
         cooling_base_c=float(weather_cfg.get("cooling_base_c", 24.0)),
         pv_temp_coeff=float(weather_cfg.get("pv_temp_coeff", 0.004)),
         pv_temp_ref_c=float(weather_cfg.get("pv_temp_ref_c", 25.0)),
+        model=str(model) if model is not None else None,
         archive_url=str(weather_cfg.get("archive_url", ARCHIVE_URL)),
         forecast_url=str(weather_cfg.get("forecast_url", FORECAST_URL)),
+        historical_url=str(weather_cfg.get("historical_url", HISTORICAL_FORECAST_URL)),
         timeout=int(weather_cfg.get("timeout_seconds", 60)),
     )
