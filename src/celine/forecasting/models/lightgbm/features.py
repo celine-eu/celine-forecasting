@@ -22,6 +22,28 @@ logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", message="Mean of empty slice", category=RuntimeWarning)
 
 
+MAX_DAY_LAG = 7
+"""Number of same-hour day lags averaged by the ``mean_same_hour_7d`` feature."""
+
+
+def observable_day_lags(horizon: int, *, max_day_lag: int = MAX_DAY_LAG) -> list[int]:
+    """Day lags observable from the forecast origin of a given horizon.
+
+    A target hour ``t`` forecast from origin ``t - horizon`` can only use the
+    value at ``t - 24 * d`` when ``24 * d >= horizon``; otherwise that value
+    lies after the origin and is unknown at forecast time.
+
+    Args:
+        horizon: Forecast horizon in hours.
+        max_day_lag: Largest day lag considered (7 for ``mean_same_hour_7d``).
+
+    Returns:
+        Ascending list of day lags ``d`` usable at this horizon (possibly empty
+        when the horizon exceeds ``24 * max_day_lag``).
+    """
+    return [d for d in range(1, max_day_lag + 1) if 24 * d >= horizon]
+
+
 def _weather_key(target: str, has_pv: bool) -> str:
     """Map (target, has_pv) to the config key for its weather feature subset."""
     if target == "grid_export":
@@ -109,6 +131,12 @@ def prepare_training_data(
     For each horizon ``h`` the lag features are anchored to the *target* hour
     (origin + h), not the origin, so the same model serves every origin.
 
+    Only lags that the origin can actually observe are used: a lag of ``L``
+    hours is admissible for horizon ``h`` only when ``L >= h``, so
+    ``mean_same_hour_7d`` averages just the day lags in
+    :func:`observable_day_lags` and ``same_hour_1d`` falls back to a 48 h
+    offset beyond 24 h.
+
     Args:
         df_device: Single-device processed hourly frame.
         target: Target column name.
@@ -163,12 +191,15 @@ def prepare_training_data(
 
         day_cols = [
             (df_sorted[COL_TS_HOUR] - pd.Timedelta(hours=d * 24)).map(ts_target).values
-            for d in range(1, 8)
+            for d in observable_day_lags(h)
         ]
-        with warnings.catch_warnings():
-            # Early rows have no history → all-NaN slice; NaN mean is intended.
-            warnings.simplefilter("ignore", RuntimeWarning)
-            hdf[f"{target}_mean_same_hour_7d"] = np.nanmean(np.column_stack(day_cols), axis=1)
+        if day_cols:
+            with warnings.catch_warnings():
+                # Early rows have no history → all-NaN slice; NaN mean is intended.
+                warnings.simplefilter("ignore", RuntimeWarning)
+                hdf[f"{target}_mean_same_hour_7d"] = np.nanmean(np.column_stack(day_cols), axis=1)
+        else:
+            hdf[f"{target}_mean_same_hour_7d"] = np.nan
         hdf[f"{target}_diff_1d"] = hdf[f"{target}_same_hour_1d"] - hdf[f"{target}_same_hour_2d"]
         hdf[f"{target}_diff_7d"] = hdf[f"{target}_same_hour_7d"] - hdf[f"{target}_same_hour_14d"]
 
