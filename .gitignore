@@ -28,3 +28,6 @@ docs/superpowers/
 local/
 
 .agents/
+
+# notebook 03 outputs and GX10 job results
+runs/
