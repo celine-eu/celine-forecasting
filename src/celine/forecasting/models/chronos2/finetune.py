@@ -254,4 +254,7 @@ def finetune(
         merged = inner.merge_and_unload()
         finetuned = Chronos2Pipeline(model=merged)
 
+    # fit() leaves the model in train mode: without eval() dropout stays on at
+    # predict time and the forecasts are noisy.
+    finetuned.model.eval()
     return finetuned

@@ -22,14 +22,26 @@ logger = logging.getLogger(__name__)
 warnings.filterwarnings("ignore", message="Mean of empty slice", category=RuntimeWarning)
 
 
-def observable_day_lags(horizon: int, max_days: int = 7) -> list[int]:
-    """Day lags ``d`` in ``1..max_days`` whose value is known at the forecast origin.
+MAX_DAY_LAG = 7
+"""Number of same-hour day lags averaged by the ``mean_same_hour_7d`` feature."""
 
-    For a target hour ``t`` forecast ``horizon`` hours ahead, the same-hour value
-    ``d`` days back sits at ``t - 24d``; it lies at or before the origin only when
-    ``24 * d >= horizon``. Empty when the horizon reaches past the whole window.
+
+def observable_day_lags(horizon: int, *, max_day_lag: int = MAX_DAY_LAG) -> list[int]:
+    """Day lags observable from the forecast origin of a given horizon.
+
+    A target hour ``t`` forecast from origin ``t - horizon`` can only use the
+    value at ``t - 24 * d`` when ``24 * d >= horizon``; otherwise that value
+    lies after the origin and is unknown at forecast time.
+
+    Args:
+        horizon: Forecast horizon in hours.
+        max_day_lag: Largest day lag considered (7 for ``mean_same_hour_7d``).
+
+    Returns:
+        Ascending list of day lags ``d`` usable at this horizon (possibly empty
+        when the horizon exceeds ``24 * max_day_lag``).
     """
-    return [d for d in range(1, max_days + 1) if 24 * d >= horizon]
+    return [d for d in range(1, max_day_lag + 1) if 24 * d >= horizon]
 
 
 def _weather_key(target: str, has_pv: bool) -> str:
@@ -119,6 +131,12 @@ def prepare_training_data(
     For each horizon ``h`` the lag features are anchored to the *target* hour
     (origin + h), not the origin, so the same model serves every origin.
 
+    Only lags that the origin can actually observe are used: a lag of ``L``
+    hours is admissible for horizon ``h`` only when ``L >= h``, so
+    ``mean_same_hour_7d`` averages just the day lags in
+    :func:`observable_day_lags` and ``same_hour_1d`` falls back to a 48 h
+    offset beyond 24 h.
+
     Args:
         df_device: Single-device processed hourly frame.
         target: Target column name.
@@ -171,8 +189,6 @@ def prepare_training_data(
         hdf[f"{target}_same_hour_7d"] = ref_7d.map(ts_target).values
         hdf[f"{target}_same_hour_14d"] = ref_14d.map(ts_target).values
 
-        # Only day lags at or before the origin: for h > 24 the 1-day lag lies in
-        # the future, and serving (which has no data past the origin) never sees it.
         day_cols = [
             (df_sorted[COL_TS_HOUR] - pd.Timedelta(hours=d * 24)).map(ts_target).values
             for d in observable_day_lags(h)

@@ -257,3 +257,73 @@ def test_build_chronos2_finetune_calls_seam_and_returns_result(
     assert captured["kwargs"]["horizon"] == 24
     assert captured["kwargs"]["context_length"] == 512
     assert captured["kwargs"]["profile"] == "cpu"  # cuda unavailable in the fake
+
+
+class _FakeModule:
+    """Stands in for a torch module: tracks train/eval mode like nn.Module."""
+
+    def __init__(self, merged: _FakeModule | None = None) -> None:
+        self.training = True
+        self._merged = merged
+
+    def eval(self) -> _FakeModule:
+        self.training = False
+        return self
+
+    def merge_and_unload(self) -> _FakeModule:
+        assert self._merged is not None
+        return self._merged
+
+
+def _finetune_with_fake_fit(
+    monkeypatch: pytest.MonkeyPatch, fitted_model: _FakeModule
+) -> Any:
+    """Run ``ft.finetune`` with a fake pipeline whose ``fit`` returns ``fitted_model``."""
+
+    class _FakePipeline:
+        def __init__(self, model: Any) -> None:
+            self.model = model
+
+        def fit(self, *args: Any, **kwargs: Any) -> Any:
+            return _FakePipeline(fitted_model)
+
+    fake_chronos = types.ModuleType("chronos")
+    fake_chronos.Chronos2Pipeline = _FakePipeline
+    fake_transformers = types.ModuleType("transformers")
+    fake_transformers.set_seed = lambda seed: None
+    monkeypatch.setitem(sys.modules, "chronos", fake_chronos)
+    monkeypatch.setitem(sys.modules, "transformers", fake_transformers)
+
+    frame = _make_frame({"dev-1": 100}, [])
+    transforms = _fit_transforms(frame, ["dev-1"], "grid_import")
+    return ft.finetune(
+        _FakePipeline(_FakeModule()),
+        frame,
+        "grid_import",
+        [],
+        transforms,
+        context_length=64,
+        horizon=6,
+        profile="cpu",
+    )
+
+
+def test_finetune_returns_merged_model_in_eval_mode(monkeypatch: pytest.MonkeyPatch) -> None:
+    """fit() leaves the model in train mode; dropout must be off for prediction."""
+    merged = _FakeModule()
+
+    out = _finetune_with_fake_fit(monkeypatch, _FakeModule(merged=merged))
+
+    assert out.model is merged and merged.training is False
+
+
+def test_finetune_returns_full_finetune_model_in_eval_mode(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without LoRA adapters to merge, the fitted model itself is set to eval mode."""
+    fitted_no_merge = types.SimpleNamespace(training=True)
+    fitted_no_merge.eval = lambda: setattr(fitted_no_merge, "training", False)
+
+    out = _finetune_with_fake_fit(monkeypatch, fitted_no_merge)
+
+    assert out.model.training is False

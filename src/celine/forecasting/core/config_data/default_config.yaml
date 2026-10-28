@@ -196,9 +196,14 @@ features:
 weather:
   latitude: null                 # e.g. 46.07 (north positive)
   longitude: null                # e.g. 11.12 (east positive)
-  elevation: null                # site metres a.s.l.; null -> Open-Meteo DEM auto-
-                                 # detect. Set it in mountainous terrain (e.g. 1100
-                                 # for Folgaria) where the grid-cell average is off.
+  elevation: null                # site metres a.s.l.; null -> Open-Meteo 90 m DEM
+                                 # (1172 m at Folgaria, what the CELINE pipeline gets).
+                                 # Forcing a different value shifts temperature by
+                                 # the lapse rate (~0.65 degC per 100 m).
+  model: null                    # Open-Meteo weather model id, e.g. icon_d2 (DWD,
+                                 # 2.2 km, the model the CELINE pipeline uses).
+                                 # null -> Open-Meteo blend + ERA5 archive history.
+                                 # Note: icon_d2 only forecasts 48 h ahead.
   panel_tilt: 30                 # PV panel tilt (deg) for global_tilted_irradiance
   panel_azimuth: 0               # PV panel azimuth (deg, Open-Meteo: 0 = south)
   heating_base_c: 18.0           # base temp for heating-degree hours

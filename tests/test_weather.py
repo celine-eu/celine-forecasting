@@ -182,6 +182,236 @@ def test_download_omits_elevation_by_default(monkeypatch):
     assert all("elevation" not in p for p in captured)
 
 
+def _hourly_payload(times: pd.DatetimeIndex, **overrides) -> dict:
+    """An Open-Meteo ``hourly`` payload over ``times``, with column overrides."""
+    n = len(times)
+    hourly: dict = {
+        "time": [t.strftime("%Y-%m-%dT%H:%M") for t in times],
+        "temperature_2m": [10.0] * n,
+        "cloud_cover": [50.0] * n,
+        "shortwave_radiation": [0.0] * n,
+        "is_day": [0] * n,
+        "global_tilted_irradiance": [0.0] * n,
+    }
+    hourly.update(overrides)
+    return {"hourly": hourly}
+
+
+def _forecast_times(today: pd.Timestamp, params: dict) -> pd.DatetimeIndex:
+    """The hourly index a forecast-style request would return."""
+    return pd.date_range(
+        today - pd.Timedelta(days=params["past_days"]),
+        today + pd.Timedelta(days=params["forecast_days"]),
+        freq="h",
+        tz="UTC",
+    )
+
+
+def test_history_wins_over_forecast_on_overlapping_hours(monkeypatch):
+    """Where both endpoints have a value, the historical one is kept."""
+    from celine.forecasting.core import weather as weather_mod
+
+    today = pd.Timestamp.now(tz="UTC").normalize()
+    probe = today - pd.Timedelta(days=7)
+
+    def fake_get_json(url, params, *, timeout):
+        if url == weather_mod.ARCHIVE_URL:
+            times = pd.date_range(
+                params["start_date"], params["end_date"], freq="h", tz="UTC"
+            )
+            return _hourly_payload(times, temperature_2m=[10.0] * len(times))
+        times = _forecast_times(today, params)
+        return _hourly_payload(times, temperature_2m=[99.0] * len(times))
+
+    monkeypatch.setattr(weather_mod, "_get_json", fake_get_json)
+    raw = weather_mod.download_raw_weather(
+        46.07, 11.12, today - pd.Timedelta(days=10), today + pd.Timedelta(days=1)
+    )
+
+    kept = raw.loc[raw["datetime"] == probe, "temperature_2m"]
+    assert kept.tolist() == [10.0]
+
+
+def test_forecast_fills_hours_where_history_is_null(monkeypatch):
+    """A null historical value is backfilled from the forecast endpoint."""
+    from celine.forecasting.core import weather as weather_mod
+
+    today = pd.Timestamp.now(tz="UTC").normalize()
+    gap = today - pd.Timedelta(days=7)
+
+    def fake_get_json(url, params, *, timeout):
+        if url == weather_mod.ARCHIVE_URL:
+            times = pd.date_range(
+                params["start_date"], params["end_date"], freq="h", tz="UTC"
+            )
+            temps = [None if t == gap else 10.0 for t in times]
+            return _hourly_payload(times, temperature_2m=temps)
+        times = _forecast_times(today, params)
+        return _hourly_payload(times, temperature_2m=[99.0] * len(times))
+
+    monkeypatch.setattr(weather_mod, "_get_json", fake_get_json)
+    raw = weather_mod.download_raw_weather(
+        46.07, 11.12, today - pd.Timedelta(days=10), today + pd.Timedelta(days=1)
+    )
+
+    filled = raw.loc[raw["datetime"] == gap, "temperature_2m"]
+    assert filled.tolist() == [99.0]
+
+
+def test_model_routes_history_to_historical_forecast_api(monkeypatch):
+    """With a named model, history comes from the Historical Forecast API."""
+    from celine.forecasting.core import weather as weather_mod
+
+    today = pd.Timestamp.now(tz="UTC").normalize()
+    urls: list[str] = []
+
+    def fake_get_json(url, params, *, timeout):
+        urls.append(url)
+        if "start_date" in params:
+            times = pd.date_range(
+                params["start_date"], params["end_date"], freq="h", tz="UTC"
+            )
+        else:
+            times = _forecast_times(today, params)
+        return _hourly_payload(times)
+
+    monkeypatch.setattr(weather_mod, "_get_json", fake_get_json)
+    weather_mod.download_raw_weather(
+        46.07,
+        11.12,
+        today - pd.Timedelta(days=10),
+        today + pd.Timedelta(days=1),
+        model="icon_d2",
+    )
+
+    assert weather_mod.HISTORICAL_FORECAST_URL in urls and weather_mod.ARCHIVE_URL not in urls
+
+
+def test_model_is_sent_with_every_request(monkeypatch):
+    """The ``models`` parameter is forwarded to both endpoints."""
+    from celine.forecasting.core import weather as weather_mod
+
+    today = pd.Timestamp.now(tz="UTC").normalize()
+    captured: list[dict] = []
+
+    def fake_get_json(url, params, *, timeout):
+        captured.append(params)
+        if "start_date" in params:
+            times = pd.date_range(
+                params["start_date"], params["end_date"], freq="h", tz="UTC"
+            )
+        else:
+            times = _forecast_times(today, params)
+        return _hourly_payload(times)
+
+    monkeypatch.setattr(weather_mod, "_get_json", fake_get_json)
+    weather_mod.download_raw_weather(
+        46.07,
+        11.12,
+        today - pd.Timedelta(days=10),
+        today + pd.Timedelta(days=1),
+        model="icon_d2",
+    )
+
+    assert len(captured) == 2 and all(p["models"] == "icon_d2" for p in captured)
+
+
+def test_no_model_omits_models_parameter(monkeypatch):
+    """Without a model the requests stay on the default Open-Meteo blend."""
+    from celine.forecasting.core import weather as weather_mod
+
+    today = pd.Timestamp.now(tz="UTC").normalize()
+    captured: list[dict] = []
+
+    def fake_get_json(url, params, *, timeout):
+        captured.append(params)
+        if "start_date" in params:
+            times = pd.date_range(
+                params["start_date"], params["end_date"], freq="h", tz="UTC"
+            )
+        else:
+            times = _forecast_times(today, params)
+        return _hourly_payload(times)
+
+    monkeypatch.setattr(weather_mod, "_get_json", fake_get_json)
+    weather_mod.download_raw_weather(
+        46.07, 11.12, today - pd.Timedelta(days=10), today + pd.Timedelta(days=1)
+    )
+
+    assert all("models" not in p for p in captured)
+
+
+def test_no_model_uses_the_archive_endpoint(monkeypatch):
+    """Without a model, history still comes from the ERA5 archive."""
+    from celine.forecasting.core import weather as weather_mod
+
+    today = pd.Timestamp.now(tz="UTC").normalize()
+    urls: list[str] = []
+
+    def fake_get_json(url, params, *, timeout):
+        urls.append(url)
+        if "start_date" in params:
+            times = pd.date_range(
+                params["start_date"], params["end_date"], freq="h", tz="UTC"
+            )
+        else:
+            times = _forecast_times(today, params)
+        return _hourly_payload(times)
+
+    monkeypatch.setattr(weather_mod, "_get_json", fake_get_json)
+    weather_mod.download_raw_weather(
+        46.07, 11.12, today - pd.Timedelta(days=10), today + pd.Timedelta(days=1)
+    )
+
+    assert weather_mod.ARCHIVE_URL in urls
+
+
+def test_rows_null_across_all_variables_are_dropped(monkeypatch):
+    """The forecast tail beyond the model horizon is dropped, not zero-filled."""
+    from celine.forecasting.core import weather as weather_mod
+
+    today = pd.Timestamp.now(tz="UTC").normalize()
+    horizon_end = today + pd.Timedelta(days=1)
+
+    def fake_get_json(url, params, *, timeout):
+        times = _forecast_times(today, params)
+        covered = [t <= horizon_end for t in times]
+        return _hourly_payload(
+            times,
+            temperature_2m=[10.0 if c else None for c in covered],
+            cloud_cover=[50.0 if c else None for c in covered],
+            shortwave_radiation=[0.0 if c else None for c in covered],
+            is_day=[0 if c else None for c in covered],
+            global_tilted_irradiance=[0.0 if c else None for c in covered],
+        )
+
+    monkeypatch.setattr(weather_mod, "_get_json", fake_get_json)
+    raw = weather_mod.download_raw_weather(
+        46.07, 11.12, today, today + pd.Timedelta(days=2)
+    )
+
+    assert raw["datetime"].max() == horizon_end
+
+
+def test_download_weather_for_config_passes_the_configured_model(monkeypatch):
+    """``weather.model`` from the config reaches the download helper."""
+    from celine.forecasting.core import weather as weather_mod
+    from celine.forecasting.core.config import load_config
+
+    config = load_config()
+    config.raw["weather"] = {"latitude": 46.07, "longitude": 11.12, "model": "icon_d2"}
+    captured: dict = {}
+
+    def fake_download(*args, **kwargs):
+        captured.update(kwargs)
+        return pd.DataFrame()
+
+    monkeypatch.setattr(weather_mod, "download_weather_features", fake_download)
+    weather_mod.download_weather_for_config(config, "2025-01-01", "2025-01-02")
+
+    assert captured["model"] == "icon_d2"
+
+
 def test_features_flow_through_cleaning_prepare_weather():
     """The built features must satisfy the existing weather pipeline stage."""
     from celine.forecasting.core.cleaning import prepare_weather

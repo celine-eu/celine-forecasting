@@ -7,9 +7,11 @@ services:
       - /bin/sh
       - -c
       - |
-        until pg_isready -h 172.17.0.1 -p 15432 -U postgres; do sleep 2; done
-        psql -h 172.17.0.1 -p 15432 -U postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'mlflow'" | grep -q 1 || \
-        psql -h 172.17.0.1 -p 15432 -U postgres -c "CREATE DATABASE mlflow"
+        until pg_isready -h host.docker.internal -p 15432 -U postgres; do sleep 2; done
+        psql -h host.docker.internal -p 15432 -U postgres -tc "SELECT 1 FROM pg_database WHERE datname = 'mlflow'" | grep -q 1 || \
+        psql -h host.docker.internal -p 15432 -U postgres -c "CREATE DATABASE mlflow"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     restart: "no"
 
   minio:
@@ -45,7 +47,7 @@ services:
     build:
       context: ./mlflow
     environment:
-      MLFLOW_BACKEND_STORE_URI: postgresql://postgres:securepassword123@172.17.0.1:15432/mlflow
+      MLFLOW_BACKEND_STORE_URI: postgresql://postgres:securepassword123@host.docker.internal:15432/mlflow
       MLFLOW_ARTIFACTS_DESTINATION: s3://mlflow-artifacts
       AWS_ACCESS_KEY_ID: minioadmin
       AWS_SECRET_ACCESS_KEY: minioadmin
@@ -58,10 +60,11 @@ services:
       CELINE_MLFLOW_AUTH_JWT_AUDIENCE: "${CELINE_MLFLOW_AUTH_JWT_AUDIENCE:-}"
       CELINE_MLFLOW_AUTH_CLI_ADMIN_AZP: "${CELINE_MLFLOW_AUTH_CLI_ADMIN_AZP:-celine-cli}"
       CELINE_MLFLOW_AUTH_SYNC_CACHE_TTL: "${CELINE_MLFLOW_AUTH_SYNC_CACHE_TTL:-60}"
-      CELINE_MLFLOW_AUTH_DATABASE_URI: "${CELINE_MLFLOW_AUTH_DATABASE_URI:-postgresql://postgres:securepassword123@172.17.0.1:15432/mlflow}"
+      CELINE_MLFLOW_AUTH_DATABASE_URI: "${CELINE_MLFLOW_AUTH_DATABASE_URI:-postgresql://postgres:securepassword123@host.docker.internal:15432/mlflow}"
       CELINE_MLFLOW_AUTH_ADMIN_PASSWORD: "${CELINE_MLFLOW_AUTH_ADMIN_PASSWORD:-changeme-strong-password}"
     extra_hosts:
       - "keycloak.celine.localhost:host-gateway"
+      - "host.docker.internal:host-gateway"
     ports:
       - "5000:5000"
     depends_on:
@@ -76,7 +79,7 @@ services:
         --app-name celine-auth
         --allowed-hosts mlflow.celine.localhost,localhost
         --cors-allowed-origins http://mlflow.celine.localhost
-        --backend-store-uri postgresql://postgres:securepassword123@172.17.0.1:15432/mlflow
+        --backend-store-uri postgresql://postgres:securepassword123@host.docker.internal:15432/mlflow
         --default-artifact-root s3://mlflow-artifacts
         --artifacts-destination s3://mlflow-artifacts
 
