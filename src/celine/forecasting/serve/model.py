@@ -23,6 +23,7 @@ from .contract import (
     resolve_quantiles,
 )
 from .covariates import CALENDAR_COLUMNS, calendar_covariates, interpolate_column
+from .digest import model_digest
 from .golden import check_golden
 
 logger = logging.getLogger(__name__)
@@ -90,7 +91,7 @@ class Predictor(Protocol):
         ...
 
     def runtime_info(self) -> dict[str, Any]:
-        """Return ``{"device", "dtype", "golden"}`` of the loaded model."""
+        """Return ``{"device", "dtype", "golden", "model_digest"}`` of the loaded model."""
         ...
 
     def forecast(self, request: ForecastRequest) -> list[SeriesOut]:
@@ -231,29 +232,47 @@ class ChronosServingModel:
         self._device_label: str | None = "injected" if pipeline is not None else None
         self.require_golden = require_golden
         self._golden: str | None = None
+        self._digest: str | None = None
 
     def card_payload(self) -> dict[str, Any]:
         """Return ``model_card.json`` as stored."""
         return dict(self._raw_card)
 
     def runtime_info(self) -> dict[str, Any]:
-        """Return the device (None until loaded), the dtype and the golden status.
+        """Return the device, the dtype, the golden status and the model digest.
 
         ``golden`` is ``"pass"`` or ``"absent"`` once :meth:`load` ran, else None.
+        ``model_digest`` is ``"sha256:<64 hex>"`` of ``config.json``,
+        ``model_card.json`` and the ``*.safetensors`` files (see :mod:`.digest`),
+        None until :meth:`load` ran. To check it by hand on the host::
+
+            cd models/<version> && sha256sum config.json model_card.json *.safetensors \\
+                | LC_ALL=C sort -k2 | sha256sum
         """
-        return {"device": self._device_label, "dtype": self.dtype, "golden": self._golden}
+        return {
+            "device": self._device_label,
+            "dtype": self.dtype,
+            "golden": self._golden,
+            "model_digest": self._digest,
+        }
 
     def load(self) -> None:
-        """Load the pipeline and run the golden self-check (idempotent).
+        """Compute the model digest, load the pipeline and run the golden check.
 
-        The server calls it at startup. ``golden.json`` (if any) is replayed
+        Idempotent. The digest (``model_digest`` in :meth:`runtime_info`) is
+        computed first, from ``model_dir``, even with an injected pipeline. The
+        server calls this at startup. ``golden.json`` (if any) is replayed
         through :meth:`forecast`, i.e. the exact ``POST /forecast`` code path.
 
         Raises:
+            MissingModelFiles: If ``config.json``, ``model_card.json`` or every
+                ``*.safetensors`` is missing from ``model_dir``.
             RuntimeError: If ``device="cuda"`` and no GPU is available.
             GoldenError: If the golden self-check fails, or ``require_golden``
                 and ``golden.json`` is absent.
         """
+        if self._digest is None:
+            self._digest = model_digest(self.model_dir)
         if self._pipeline is None:
             self._pipeline, self._device_label = _load_pipeline(
                 self.model_dir, self.dtype, self.device

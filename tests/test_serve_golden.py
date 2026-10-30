@@ -41,6 +41,8 @@ class FakePipeline:
 @pytest.fixture
 def model_dir(tmp_path: Path, serve_card_dict: dict) -> Path:
     (tmp_path / "model_card.json").write_text(json.dumps(serve_card_dict))
+    (tmp_path / "config.json").write_text("{}")
+    (tmp_path / "model.safetensors").write_bytes(b"w")
     return tmp_path
 
 

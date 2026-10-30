@@ -18,6 +18,7 @@ from celine.forecasting.serve.app import MAX_BODY_BYTES, create_app
 from celine.forecasting.serve.contract import ForecastRequest, SeriesOut
 from celine.forecasting.serve.model import ChronosServingModel, ModelCard
 
+DIGEST = "sha256:" + "a" * 64
 TOKEN = "test-token-123"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
 
@@ -31,7 +32,9 @@ class FakePipeline:
 @pytest.fixture
 def model(tmp_path: Path, serve_card_dict: dict) -> ChronosServingModel:
     (tmp_path / "model_card.json").write_text(json.dumps(serve_card_dict))
-    return ChronosServingModel(tmp_path, pipeline=FakePipeline())
+    m = ChronosServingModel(tmp_path, pipeline=FakePipeline())
+    m._digest = DIGEST  # what load() would have computed
+    return m
 
 
 @pytest.fixture
@@ -49,6 +52,7 @@ def test_health_needs_no_auth(client: TestClient) -> None:
         "device": "injected",
         "dtype": "float32",
         "golden": None,
+        "model_digest": DIGEST,
     }
 
 
@@ -86,7 +90,7 @@ def test_disabled_docs_leave_health_and_auth_unchanged(
 def test_model_returns_card(client: TestClient, serve_card_dict: dict) -> None:
     resp = client.get("/model", headers=AUTH)
     assert resp.status_code == 200
-    runtime = {"device": "injected", "dtype": "float32", "golden": None}
+    runtime = {"device": "injected", "dtype": "float32", "golden": None, "model_digest": DIGEST}
     assert resp.json() == {**serve_card_dict, **runtime}
 
 
@@ -97,6 +101,7 @@ def test_forecast_ok(client: TestClient) -> None:
     out = resp.json()
     assert out["model_name"] == "chronos2-fleet"
     assert out["model_version"] == "fleet-test"
+    assert out["model_digest"] == DIGEST
     assert out["origin"] == "2026-09-01T00:00:00Z"
     assert out["horizon"] == 24
     assert out["quantiles"] == [0.1, 0.5, 0.9]
@@ -204,7 +209,7 @@ class _SlowPredictor:
         return self.card.model_dump()
 
     def runtime_info(self) -> dict:
-        return {"device": "fake", "dtype": "float32"}
+        return {"device": "fake", "dtype": "float32", "model_digest": DIGEST}
 
     def forecast(self, request: ForecastRequest) -> list[SeriesOut]:
         with self._guard:
@@ -231,3 +236,16 @@ def test_model_calls_are_serialised(serve_card_dict: dict) -> None:
         )
     assert codes == [200] * 4
     assert predictor.max_active == 1
+
+
+def test_health_reports_digest(client: TestClient) -> None:
+    assert client.get("/health").json()["model_digest"] == DIGEST
+
+
+def test_model_reports_digest(client: TestClient) -> None:
+    assert client.get("/model", headers=AUTH).json()["model_digest"] == DIGEST
+
+
+def test_forecast_response_carries_digest(client: TestClient) -> None:
+    out = client.post("/forecast", json=make_serve_payload(), headers=AUTH).json()
+    assert out["model_digest"] == DIGEST

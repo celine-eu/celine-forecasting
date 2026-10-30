@@ -14,6 +14,7 @@ from pydantic import ValidationError
 from celine.forecasting.serve import model as model_mod
 from celine.forecasting.serve.contract import ForecastRequest
 from celine.forecasting.serve.covariates import calendar_covariates
+from celine.forecasting.serve.digest import MissingModelFiles, model_digest
 from celine.forecasting.serve.model import (
     ChronosServingModel,
     ModelCard,
@@ -42,6 +43,8 @@ class FakePipeline:
 @pytest.fixture
 def model_dir(tmp_path: Path, serve_card_dict: dict) -> Path:
     (tmp_path / "model_card.json").write_text(json.dumps(serve_card_dict))
+    (tmp_path / "config.json").write_text("{}")
+    (tmp_path / "model.safetensors").write_bytes(b"w")
     return tmp_path
 
 
@@ -235,9 +238,19 @@ def test_runtime_info_reports_loaded_device(model_dir: Path, monkeypatch) -> Non
         model_mod, "_load_pipeline", lambda path, dtype, device: (FakePipeline(), "cuda:0 GB10")
     )
     m = ChronosServingModel(model_dir, dtype="bfloat16", device="cuda")
-    assert m.runtime_info() == {"device": None, "dtype": "bfloat16", "golden": None}
+    assert m.runtime_info() == {
+        "device": None,
+        "dtype": "bfloat16",
+        "golden": None,
+        "model_digest": None,
+    }
     m.load()
-    assert m.runtime_info() == {"device": "cuda:0 GB10", "dtype": "bfloat16", "golden": "absent"}
+    assert m.runtime_info() == {
+        "device": "cuda:0 GB10",
+        "dtype": "bfloat16",
+        "golden": "absent",
+        "model_digest": model_digest(model_dir),
+    }
 
 
 def test_load_propagates_missing_cuda(model_dir: Path, monkeypatch) -> None:
@@ -247,3 +260,33 @@ def test_load_propagates_missing_cuda(model_dir: Path, monkeypatch) -> None:
     monkeypatch.setattr(model_mod, "_load_pipeline", no_gpu)
     with pytest.raises(RuntimeError, match="CUDA"):
         ChronosServingModel(model_dir, device="cuda").load()
+
+
+def test_load_computes_digest_before_golden(model_dir: Path, monkeypatch) -> None:
+    seen: dict = {}
+
+    def spy(*args, **kwargs):
+        seen["digest_at_golden"] = m.runtime_info()["model_digest"]
+        return "absent"
+
+    monkeypatch.setattr(model_mod, "check_golden", spy)
+    m = ChronosServingModel(model_dir, pipeline=FakePipeline())
+    m.load()
+    assert m.runtime_info()["model_digest"] == model_digest(model_dir)
+    assert seen["digest_at_golden"] == model_digest(model_dir)
+
+
+def test_load_refuses_dir_without_weights(model_dir: Path, monkeypatch) -> None:
+    (model_dir / "model.safetensors").unlink()
+    called: list = []
+    monkeypatch.setattr(model_mod, "_load_pipeline", lambda *a: called.append(a))
+    with pytest.raises(MissingModelFiles):
+        ChronosServingModel(model_dir).load()
+    assert called == []
+
+
+def test_runtime_info_digest_none_before_load(model_dir: Path) -> None:
+    assert (
+        ChronosServingModel(model_dir, pipeline=FakePipeline()).runtime_info()["model_digest"]
+        is None
+    )

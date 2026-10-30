@@ -206,3 +206,17 @@ def test_response_serialisation() -> None:
 
 def test_quantile_key_format() -> None:
     assert [quantile_key(q) for q in (0.1, 0.25, 0.5, 0.9)] == ["0.1", "0.25", "0.5", "0.9"]
+
+
+def test_response_without_digest_still_validates() -> None:
+    resp = ForecastResponse(
+        model_name="m",
+        model_version="v",
+        origin=datetime(2026, 9, 1, tzinfo=UTC),
+        horizon=1,
+        quantiles=[0.5],
+        latency_ms=1,
+        series=[],
+    )
+    assert resp.model_digest is None
+    assert resp.model_dump(mode="json")["model_digest"] is None

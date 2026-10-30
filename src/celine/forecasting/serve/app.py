@@ -1,9 +1,16 @@
 """FastAPI application of the Chronos-2 inference server (contract: spec section 3).
 
 Endpoints:
-    GET  /health    no auth; liveness plus model identity.
-    GET  /model     bearer auth; the model card.
-    POST /forecast  bearer auth; fleet quantile forecast.
+    GET  /health    no auth; liveness plus model identity (incl. ``model_digest``).
+    GET  /model     bearer auth; the model card plus runtime info (incl. ``model_digest``).
+    POST /forecast  bearer auth; fleet quantile forecast; the response names the
+                    exact model in ``model_digest``.
+
+``model_digest`` is ``sha256:<64 hex>`` of ``config.json``, ``model_card.json`` and
+the ``*.safetensors``; hand-check on the host with::
+
+    cd models/<version> && sha256sum config.json model_card.json *.safetensors \\
+        | LC_ALL=C sort -k2 | sha256sum
 
 ``/docs``, ``/redoc`` and ``/openapi.json`` are disabled (404).
 
@@ -109,7 +116,7 @@ def create_app(model: Predictor, token: str, *, max_body_bytes: int = MAX_BODY_B
 
     @app.get("/health")
     def health() -> dict[str, Any]:
-        """Liveness probe with the served model's identity (no auth)."""
+        """Liveness probe with the served model's identity and ``model_digest`` (no auth)."""
         return {
             "status": "ok",
             "model_name": model.card.model_name,
@@ -119,12 +126,12 @@ def create_app(model: Predictor, token: str, *, max_body_bytes: int = MAX_BODY_B
 
     @app.get("/model", dependencies=[Depends(require_token)])
     def model_card() -> dict[str, Any]:
-        """Return the served model card."""
+        """Return the served model card and runtime info, incl. ``model_digest``."""
         return {**model.card_payload(), **model.runtime_info()}
 
     @app.post("/forecast", dependencies=[Depends(require_token)], response_model=None)
     async def forecast(request: Request) -> JSONResponse:
-        """Forecast every series of the request (see the module docstring)."""
+        """Forecast every series; the body carries ``model_digest`` of the loaded model."""
         started = time.perf_counter()
         try:
             body = await _read_body(request, max_body_bytes)
@@ -162,6 +169,7 @@ def create_app(model: Predictor, token: str, *, max_body_bytes: int = MAX_BODY_B
             quantiles=resolve_quantiles(req, model.card),
             latency_ms=latency_ms,
             series=series,
+            model_digest=model.runtime_info().get("model_digest"),
         )
         return JSONResponse(content=resp.model_dump(mode="json"))
 

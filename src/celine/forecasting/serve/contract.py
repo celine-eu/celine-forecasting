@@ -181,3 +181,5 @@ class ForecastResponse(BaseModel):
     quantiles: list[float]
     latency_ms: int
     series: list[SeriesOut]
+    model_digest: str | None = None
+    """``sha256:<64 hex>`` of the served weights, card and config (see ``digest.py``)."""

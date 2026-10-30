@@ -20,6 +20,8 @@ def model_dir(tmp_path: Path, serve_card_dict: dict) -> Path:
     d = tmp_path / "model"
     d.mkdir()
     (d / "model_card.json").write_text(json.dumps(serve_card_dict))
+    (d / "config.json").write_text("{}")
+    (d / "model.safetensors").write_bytes(b"w")
     return d
 
 
