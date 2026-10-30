@@ -198,3 +198,14 @@ def test_serve_golden_mismatch_exits_1(
     assert result.exit_code == 1
     assert "app" not in served
     assert "max abs diff" in result.output
+
+
+def test_serve_missing_model_files_refuses_cleanly(
+    model_dir: Path, served: dict, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (model_dir / "model.safetensors").unlink()
+    monkeypatch.setenv("CHRONOS_TOKEN", "secret")
+    result = runner.invoke(app, ["serve", "--model-dir", str(model_dir)])
+    assert result.exit_code == 1
+    assert "app" not in served
+    assert "Refusing to start" in result.output

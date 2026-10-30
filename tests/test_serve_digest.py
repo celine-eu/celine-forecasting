@@ -28,9 +28,10 @@ def test_digest_files_constant() -> None:
 
 
 def test_digest_matches_sha256sum_recipe(tmp_path: Path) -> None:
-    _write(tmp_path, BASE)
+    files = {**BASE, "model-00002.safetensors": b"w2"}
+    _write(tmp_path, files)
     lines = "".join(
-        f"{hashlib.sha256((tmp_path / n).read_bytes()).hexdigest()}  {n}\n" for n in sorted(BASE)
+        f"{hashlib.sha256((tmp_path / n).read_bytes()).hexdigest()}  {n}\n" for n in sorted(files)
     )
     assert model_digest(tmp_path) == "sha256:" + hashlib.sha256(lines.encode()).hexdigest()
 

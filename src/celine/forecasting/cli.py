@@ -726,6 +726,7 @@ def serve(
     import uvicorn
 
     from .serve.app import create_app
+    from .serve.digest import MissingModelFiles
     from .serve.model import ChronosServingModel
 
     try:
@@ -737,14 +738,14 @@ def serve(
             require_golden=require_golden,
         )
         model.load()
-    except (ValueError, RuntimeError) as exc:
+    except (ValueError, RuntimeError, MissingModelFiles) as exc:
         typer.echo(f"Refusing to start: {exc}", err=True)
         raise typer.Exit(1) from exc
     info = model.runtime_info()
     logger.info(
-        "serving %s %s on %s:%d (device=%s dtype=%s golden=%s)",
+        "serving %s %s on %s:%d (device=%s dtype=%s golden=%s digest=%s)",
         model.card.model_name, model.card.model_version, host, port,
-        info["device"], info["dtype"], info["golden"],
+        info["device"], info["dtype"], info["golden"], info["model_digest"],
     )
     uvicorn.run(create_app(model, token), host=host, port=port, log_level="info")
 
