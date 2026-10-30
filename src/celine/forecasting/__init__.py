@@ -30,7 +30,7 @@ from .core.weather import (
 )
 from .pipeline import PipelineResult, train_pipeline
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 __all__ = [
     "ForecastConfig",

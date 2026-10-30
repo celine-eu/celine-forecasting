@@ -1,6 +1,6 @@
 [project]
 name = "celine-meter-forecasting"
-version = "0.1.0"
+version = "0.2.0"
 description = "Open-source 48h energy forecasting for smart meters (per-device LightGBM + CQR intervals)"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
