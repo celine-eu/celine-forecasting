@@ -31,3 +31,7 @@ local/
 
 # notebook 03 outputs and GX10 job results
 runs/
+
+# scratch notebooks, kept locally only
+notebooks/06b_cut_comparison.ipynb
+notebooks/07_chronos2_report.ipynb
